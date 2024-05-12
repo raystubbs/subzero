@@ -1,4 +1,4 @@
-(ns ^:no-doc zro.impl.util
+(ns ^:no-doc subzero.impl.util
   #?(:cljs (:require-macros zero.impl.base))
   (:require
    [clojure.string :as str])

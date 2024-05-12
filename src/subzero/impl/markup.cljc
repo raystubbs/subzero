@@ -1,4 +1,4 @@
-(ns ^:no-doc zro.impl.markup
+(ns ^:no-doc subzero.impl.markup
   (:require
    [clojure.string :as str]))
 
@@ -28,33 +28,33 @@ yields `[tag-or-tags props body]`.
   (normalize-vnode
     [:div
      :on-click "blah"
-     :zro/class :none
+     :class :none
      "Something else"]))
 
 (defn- extract-tag-props "
 Given a normalized vnode, parses the ids and classes
-out of the tag and into the props, adding a `:zro/sel`
+out of the tag and into the props, adding a `:#sel`
 prop containing the original
 tag.
 " [[tag props body]]
   (if-let [[_ type id classes] (re-matches #"^([^#.]+)([#][^.]+)?([.].+)?$" (name tag))]
     [(keyword (namespace tag) type)
      (cond-> props
-       true (assoc :zro/sel tag)
+       true (assoc :#sel tag)
        (not (str/blank? id)) (assoc :id (subs id 1))
-       (not (str/blank? classes)) (assoc :zro/class
-                                    (->> [(some-> classes (str/split #"[.]")) (:zro/class props)]
+       (not (str/blank? classes)) (assoc :#class
+                                    (->> [(some-> classes (str/split #"[.]")) (:#class props)]
                                       flatten (remove str/blank?) (map name) vec not-empty)))
      body]
     (throw (ex-info "Invalid tag" {:tag tag}))))
 
 (comment
   (extract-tag-props
-    [:div#my-thing.foo.bar {:zro/class "something"} (list "body")]))
+    [:div#my-thing.foo.bar {:#class "something"} (list "body")]))
 
 (defn rewrite-props "
 Given a normalized vnode, rewrites `:zero.core/*` prop keys
-as `:zro/*`, and removes any keys with other namespaces,
+as `:#*`, and removes any keys with other namespaces,
 and any non-keyword keys.
 " [vnode]
   (update vnode 1
@@ -68,19 +68,19 @@ and any non-keyword keys.
             (= :zero.core/internals k)
             (-> props
               (dissoc k)
-              (assoc :zro/internals
+              (assoc :#internals
                 (reduce-kv
                   (fn [internals k v]
                     (cond-> internals
                       (and (keyword? k) (= "zero.core" (namespace k)))
-                      (-> (dissoc k) (assoc (keyword "zro" (name k)) v))))
+                      (-> (dissoc k) (assoc (keyword (str "#" (name k))) v))))
                   (:zero.core/internals props)
                   (:zero.core/internals props))))
             
             (= "zero.core" (namespace k))
             (-> props
               (dissoc k)
-              (assoc (keyword "zro" (name k)) v))
+              (assoc (keyword (str "#" (name k))) v))
             
             (namespace k)
             (dissoc props k)
@@ -105,12 +105,12 @@ one sequence.
         (case (count tag-or-tags)
           0 (throw (ex-info "Invalid tag" {:tag tag-or-tags}))
           1 [(first tag-or-tags) props body]
-          [(first tag-or-tags) (select-keys props [:zro/key])
+          [(first tag-or-tags) (select-keys props [:#key])
            (list
              (reduce
                (fn [m middle-tag]
                  (extract-tag-props [middle-tag {} (list m)]))
-               (extract-tag-props [(last tag-or-tags) (dissoc props :zro/key) body])
+               (extract-tag-props [(last tag-or-tags) (dissoc props :#key) body])
                (-> tag-or-tags butlast rest)))]))
       rewrite-props
       extract-tag-props)))

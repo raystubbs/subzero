@@ -1,6 +1,6 @@
-(ns zro.rstore-test
+(ns subzero.rstore-test
   (:require
-   [zro.rstore :as rstore]
+   [subzero.rstore :as rstore]
    #?(:clj [clojure.test :refer [deftest is]]
       :cljs [cljs.test :refer-macros [deftest is]])))
 

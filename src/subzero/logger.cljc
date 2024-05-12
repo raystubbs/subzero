@@ -1,5 +1,5 @@
-(ns zro.logger
-  #?(:cljs (:require-macros zro.logger))
+(ns subzero.logger
+  #?(:cljs (:require-macros subzero.logger))
   (:require
    #?(:clj [clojure.stacktrace :as stacktrace])))
 

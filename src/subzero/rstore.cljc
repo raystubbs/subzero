@@ -1,10 +1,10 @@
-(ns zro.rstore "
+(ns subzero.rstore "
 A simple data store suitable for reactive applications.
 It's just an atom that tracks some extra stuff to enable
 change tracking patches.
 "
   (:require
-   [zro.logger :as log])
+   [subzero.logger :as log])
   #?(:clj
      (:import
       [clojure.lang IMeta])))

@@ -1,6 +1,6 @@
-(ns zro.plugins.component-registry
+(ns subzero.plugins.component-registry
   (:require 
-   [zro.rstore :refer [IRStore] :as rstore]))
+   [subzero.rstore :refer [IRStore] :as rstore]))
 
 (defn get-attribute-writer
   [!db component-name]

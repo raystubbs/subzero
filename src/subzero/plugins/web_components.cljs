@@ -1,4 +1,4 @@
-(ns zro.plugins.web-components "
+(ns subzero.plugins.web-components "
 Implements web components on top of the component registry.
 
 State lives at `::state` in the db, and has:
@@ -28,13 +28,13 @@ State lives at `::state` in the db, and has:
   ;; Only populated when hot reload is enabled.
 "
   (:require
-   [zro.rstore :as rstore]
-   [zro.engine :as engine]
-   [zro.injection :as inj]
-   [zro.impl.util :as util]
-   [zro.impl.markup :as markup]
-   [zro.logger :as log]
-   [zro.plugins.component-registry :as component-registry-plugin]
+   [subzero.rstore :as rstore]
+   [subzero.engine :as engine]
+   [subzero.injection :as inj]
+   [subzero.impl.util :as util]
+   [subzero.impl.markup :as markup]
+   [subzero.logger :as log]
+   [subzero.plugins.component-registry :as component-registry-plugin]
    [goog :refer [DEBUG]]
    [goog.object :as obj]
    [clojure.string :as str]
@@ -44,8 +44,8 @@ State lives at `::state` in the db, and has:
   [s]
   (doto (js/CSSStyleSheet.) (.replace s)))
 
-(def ^:private private-state-sym (js/Symbol "zroWebComponentsPrivate"))
-(def ^:private render-order-sym (js/Symbol "zroWebComponentsRenderOrder"))
+(def ^:private private-state-sym (js/Symbol "subzeroWebComponentsPrivate"))
+(def ^:private render-order-sym (js/Symbol "subzeroWebComponentsRenderOrder"))
 (defonce ^:private html-ns "http://www.w3.org/1999/xhtml")
 (defonce ^:private svg-ns "http://www.w3.org/2000/svg")
 (def ^:private default-stylesheet (compile-css ":host { display: contents; }"))
@@ -275,7 +275,7 @@ when the asset changes on disk.
 (defn- diff-props
   [old-props new-props]
   (let [all-keys (merge old-props new-props)
-        deep-keys [:zro/style :zro/on :zro/internals :zro/bind]]
+        deep-keys [:#style :#on :#internals :#bind]]
     (as-> all-keys $
       (apply dissoc $ deep-keys)
       (keys $)
@@ -394,35 +394,35 @@ from a set/coll of keywords.
                          (swap! !private-state assoc ::host-css x)
                          x))]
     (when-not (empty? diff)
-      (when-let [style-diff (diff :zro/style)]
+      (when-let [style-diff (diff :#style)]
         (let [style-obj (-> host-css .-cssRules (.item 0) .-style)]
           (doseq [[k [_ new-val]] style-diff]
             (if-not new-val
               (.removeProperty style-obj (name k))
               (.setProperty style-obj (name k) (markup/clj->css-property new-val))))))
-      (when-some [[_ css-prop] (get diff :zro/css)]
+      (when-some [[_ css-prop] (get diff :#css)]
         (set! (.-adoptedStyleSheets shadow-root)
           (->> (conj css-prop host-css) (mapv (partial get-stylesheet-object !db)) to-array)))
       
-      (patch-listeners! !db shadow-root (diff :zro/on))
+      (patch-listeners! !db shadow-root (diff :#on))
 
       ;; patch internals
-      (doseq [[k [_ new-val]] (diff :zro/internals)]
+      (doseq [[k [_ new-val]] (diff :#internals)]
         (case k
-          :zro/states
+          :#states
           (when-some [states ^js/CustomStateSet (.-states internals)]
             (.clear states)
             (doseq [state-val new-val]
               (.add states (name state-val))))
 
-          :zro/value
+          :#value
           (when form-associated?
             (let [[value state] (if (map? new-val)
                                   [(:value new-val) (:state new-val)]
                                   [new-val nil])]
               (.setFormValue internals (or value "") (or state ""))))
 
-          :zro/validity
+          :#validity
           (when form-associated?
             (.setValidity internals
               (coll->validity-flags-obj (:flags new-val))
@@ -442,14 +442,15 @@ from a set/coll of keywords.
         diff (diff-props (::props @!private-state) props)]
     (when-not (empty? diff)
       ;; normal props
-      (doseq [[k [_old-val new-val]] (remove (comp namespace key) diff)]
+      (doseq [[k [_old-val new-val]] diff
+              :when (and (nil? (namespace k)) (not (str/starts-with? (name k) "#")))]
         (set-prop! !db element k new-val))
 
-      (patch-listeners! !db element (diff :zro/on))
-      (patch-bindings! !db element (diff :zro/bind))
+      (patch-listeners! !db element (diff :#on))
+      (patch-bindings! !db element (diff :#bind))
 
       ;; patch styles
-      (when-let [style-diff (diff :zro/style)]
+      (when-let [style-diff (diff :#style)]
         (let [style-obj (.-style element)]
           (doseq [[k [_ new-val]] style-diff]
             (if-not new-val
@@ -457,7 +458,7 @@ from a set/coll of keywords.
               (.setProperty style-obj (name k) (markup/clj->css-property new-val))))))
 
       ;; patch classes
-      (when-let [[_ class] (diff :zro/class)]
+      (when-let [[_ class] (diff :#class)]
         ;; setting className is faster than .setAttribute, but there
         ;; doesn't seem to be a way to remove the attribute this way,
         ;; so use .removeAttribute to remove it
@@ -488,13 +489,13 @@ from a set/coll of keywords.
       (when-not (.-isConnected node)
         (let [!private-state (get-private-state node)
               props (::props @!private-state)]
-          (doseq [[k watchable] (:zro/bind props)]
+          (doseq [[k watchable] (:#bind props)]
             (when (some? watchable)
               (unbind k !db node)))
-          (doseq [[k listener] (:zro/on props)]
+          (doseq [[k listener] (:#on props)]
             (when (some? listener)
               (unlisten k !db node)))
-          (swap! !private-state update ::props dissoc :zro/bind :zro/on))) 
+          (swap! !private-state update ::props dissoc :#bind :#on))) 
       
       (doseq [child-dom (-> node .-childNodes array-seq)]
         (cleanup-for-detachment !db child-dom))
@@ -585,7 +586,7 @@ from a set/coll of keywords.
 (defn- patch-children!
   [!db context ^js/Node node children]
   (let [document ^js/HTMLDocument (get-in @!db [::state ::document])
-        host ^js/HTMLElement (:zro/host context)
+        host ^js/HTMLElement (:#host context)
         host-state @(get-private-state host)
         disable-tags? (get-in @!db [::state ::disable-tags?])
         source-layout (-> node .-childNodes array-seq vec)
@@ -595,11 +596,11 @@ from a set/coll of keywords.
                           (if (-> child-dom .-nodeType (= js/Node.TEXT_NODE))
                             :text
                             (let [props (::props @(get-private-state child-dom))]
-                              [(:zro/sel props) (:zro/key props)])))
+                              [(:#sel props) (:#key props)])))
                         source-layout))
 
         take-el-dom (fn [tag props]
-                      (let [matcher [(:zro/sel props) (:zro/key props)]
+                      (let [matcher [(:#sel props) (:#key props)]
                             match (->> matcher (get @!child-doms) first)]
                         (if match
                           (do
@@ -630,10 +631,10 @@ from a set/coll of keywords.
                                     old-props (::props @(get-private-state child-element))]
                                 (when (or
                                         disable-tags?
-                                        (nil? (:zro/tag props))
-                                        (not= (:zro/tag props) (:zro/tag old-props)))
+                                        (nil? (:#tag props))
+                                        (not= (:#tag props) (:#tag old-props)))
                                   (patch-props! !db child-element props)
-                                  (when-not (:zro/opaque? props)
+                                  (when-not (:#opaque? props)
                                     (patch-children! !db context child-element body)))
                                 [child-element])
 
@@ -710,10 +711,10 @@ from a set/coll of keywords.
 
 (defn- patch-root!
   [!db context vnode]
-  (let [host ^js/HTMLElement (:zro/host context)
-        shadow-root ^js/ShadowRoot (:zro/root context)
+  (let [host ^js/HTMLElement (:#host context)
+        shadow-root ^js/ShadowRoot (:#root context)
         !host-state (get-private-state host)
-        !static-state (-> context ^js/HTMLElement (:zro/host) .-constructor get-private-state)
+        !static-state (-> context ^js/HTMLElement (:#host) .-constructor get-private-state)
         default-css (::default-css @!static-state)
         old-props (::props @!host-state)
         [props body] (cond
@@ -727,16 +728,16 @@ from a set/coll of keywords.
                        [{} (list vnode)])]
     (when (or
             (get-in @!db [::state ::disable-tags?])
-            (nil? (:zro/tag props))
-            (not= (:zro/tag props) (:zro/tag old-props)))
+            (nil? (:#tag props))
+            (not= (:#tag props) (:#tag old-props)))
       (patch-root-props! !db shadow-root (::internals @!host-state)
-        (update props :zro/css
+        (update props :#css
           (fn [css]
             (cond
               (coll? css) (into default-css css)
               (some? css) (conj default-css css)
               :else default-css))))
-      (when-not (:zro/opaque? props)
+      (when-not (:#opaque? props)
         (patch-children! !db context shadow-root body)))))
 
 (defn- render-dirty-elements!
@@ -763,7 +764,7 @@ from a set/coll of keywords.
                          :data {:component (::name @!static-state)}
                          :ex e)
                        nil))
-              context {:zro/host element :zro/root shadow}
+              context {:#host element :#root shadow}
               vdom (inj/apply-injections vdom context)]
 
           ;; if it needs to be focusable, but explicit tabIndex wasn't set

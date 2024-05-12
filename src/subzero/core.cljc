@@ -1,6 +1,6 @@
-(ns zro.engine
+(ns subzero.core
   (:require
-   [zro.rstore :as rstore]))
+   [subzero.rstore :as rstore]))
 
 (defn create-db
   []
