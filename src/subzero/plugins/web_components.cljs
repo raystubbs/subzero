@@ -353,8 +353,9 @@ from a set/coll of keywords.
   (bind
     [k !db element watchable]
     (let [!private-state (get-private-state element)]
-      (when-let [old-watchable (::bindings @!private-state)]
+      (when-let [old-watchable (get-in @!private-state [::bindings k])]
         (remove-watch old-watchable k))
+      (swap! !private-state assoc-in [::bindings k] watchable)
       (add-watch watchable k
         (fn [_ _ old-val new-val]
           (when-not (identical? old-val new-val)
@@ -362,7 +363,14 @@ from a set/coll of keywords.
       (when (and
               (util/can-deref? watchable)
               (not (identical? @watchable (get-element-prop !db element k))))
-        (set-element-prop! !db element k @watchable)))))
+        (set-element-prop! !db element k @watchable))))
+  (unbind
+    [k !db element]
+    (let [!private-state (get-private-state element)]
+      (when-let [old-watchable (get-in @!private-state [::bindings k])]
+        (remove-watch old-watchable k))
+      (set-element-prop! !db element k js-undefined)
+      (swap! !private-state util/dissoc-in [::bindings k]))))
 
 (defn- patch-listeners!
   [!db ^js/EventTarget target listener-diff-map]

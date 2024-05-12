@@ -8,7 +8,9 @@
 
 (defn do-steps [zero-element & step-fns]
   (if (empty? step-fns)
-    nil
+    (js/Promise. ;; this gives async stuff time to finish up
+      (fn [resolve]
+        (js/setTimeout resolve 120)))
     (js/Promise.
       (fn [resolve reject] 
             (js/setTimeout
