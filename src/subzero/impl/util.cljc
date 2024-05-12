@@ -1,5 +1,5 @@
 (ns ^:no-doc subzero.impl.util
-  #?(:cljs (:require-macros zero.impl.base))
+  #?(:cljs (:require-macros subzero.impl.util))
   (:require
    [clojure.string :as str])
   #?(:clj
@@ -89,7 +89,6 @@
   [m [k & ks]]
   (if (seq ks)
     (let [new (dissoc-in (get m k) ks)]
-      (prn new)
       (if (seq new)
         (assoc m k new)
         (dissoc m k)))

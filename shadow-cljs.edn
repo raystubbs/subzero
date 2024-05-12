@@ -4,10 +4,10 @@
  {:browser-tests
   {:target :esm
    :output-dir "target/browser-tests"
-   :ns-regexp "^zero[.]browser[.].+[-]test$"
-   :modules {:all {:entries [zero.browser.component-test]}}}
+   :ns-regexp ".+[-]btest$"
+   :modules {:all {:entries [subzero.component-btest]}}}
   
   :node-tests
   {:target :node-test
-   :ns-regexp "^zero[.]clj[cs][.].+[-]test$"
+   :ns-regexp ".+[-]test$"
    :output-to "target/node-tests.js"}}}

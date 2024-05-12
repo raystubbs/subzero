@@ -118,10 +118,14 @@ change tracking patches.
       (fn [_ _ old-val new-val]
         (let [{changed-paths ::changed-paths
                affected-watchers ::affected-watchers} (meta new-val)]
-          (doseq [watcher-fn (or affected-watchers
-                               (map :f (-> !rstore meta ::watches :watchers vals)))]
+          (doseq [{:keys [f path]}
+                  (or affected-watchers
+                    (-> !rstore meta ::watches :watchers vals))]
             (try
-              (watcher-fn old-val new-val (or changed-paths #{[]}))
+              (f
+                (get-in old-val path)
+                (get-in new-val path)
+                (or changed-paths #{[]}))
               (catch #?(:clj Exception :cljs :default) ex
                 (log/error "Error in rstore watcher" :ex ex)))))))))
 
@@ -199,7 +203,7 @@ change tracking patches.
                   :watch-keys
                   (map
                     (fn [watch-key]
-                      (get-in watches [:watchers watch-key :f])))))
+                      (get-in watches [:watchers watch-key])))))
               affected-paths)]
         (vary-meta patched assoc
           ::affected-watchers affected-watchers

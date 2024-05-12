@@ -29,8 +29,7 @@ State lives at `::state` in the db, and has:
 "
   (:require
    [subzero.rstore :as rstore]
-   [subzero.engine :as engine]
-   [subzero.injection :as inj]
+   [subzero.core :as core]
    [subzero.impl.util :as util]
    [subzero.impl.markup :as markup]
    [subzero.logger :as log]
@@ -94,12 +93,12 @@ State lives at `::state` in the db, and has:
   [!db class]
   (rstore/patch! !db
     {:path [::state ::class->fields-index]
-     :change [:remove class]})
+     :change [:clear class]})
   nil)
 
-(defn- hot-reload?
+(defn- hot-reload-enabled?
   [!db]
-  (and DEBUG (get-in @!db [::state ::hot-reload?])))
+  (boolean (and DEBUG (get-in @!db [::state ::hot-reload?]))))
 
 (defn- doc-origin
   [!db]
@@ -133,7 +132,7 @@ will never be satisfied.  So it won't apply any styling to the top
 level; but tooling will still be able to see it and update it
 when the asset changes on disk.
 " [!db css-url]
-  (when (hot-reload? !db)
+  (when (hot-reload-enabled? !db)
     (let [full-css-url (absolute-url !db css-url)
           document ^js/HTMLDocument (get-in @!db [::state ::document])]
       (when (local-url? !db full-css-url)
@@ -195,11 +194,17 @@ when the asset changes on disk.
           (rstore/patch! !db
             {:path [::state ::css-stylesheet-objects absolute-url-str]
              :change [:value new-css-obj]})
-          new-css-obj)))))
+          new-css-obj)))
+    
+    (string? x)
+    (compile-css x)
+    
+    (instance? js/CSSStyleSheet x)
+    x))
 
 (defn- adjusted-prop-value
   [!db prop-name value]
-  (if-not (and (hot-reload? !db) (= :href prop-name))
+  (if-not (and (hot-reload-enabled? !db) (= :href prop-name))
     value
     (let [url (cond
                 (instance? js/URL value)
@@ -319,7 +324,7 @@ from a set/coll of keywords.
       (when-let [old-listener-aborter ^js/AbortController (get-in @!private-state [::listener-aborters event])]
         (.abort old-listener-aborter))
       (swap! !private-state assoc-in [::listener-aborters event] aborter)
-      (.addEventListener target (name k) listener-fun))
+      (.addEventListener target (name k) listener-fun #js{:signal (.-signal aborter)}))
     nil)
   (unlisten
     [k _!db target]
@@ -331,7 +336,7 @@ from a set/coll of keywords.
     nil))
 
 (extend-protocol IListenValue
-  js/Function
+  function
   (get-listener-fun
     [f _!db]
     f))
@@ -369,7 +374,7 @@ from a set/coll of keywords.
             (if (and (ifn? new-val) (not (satisfies? IListenValue new-val)))
               new-val
               (get-listener-fun new-val !db))]
-        (listen k !db new-val listener-fun)))))
+        (listen k !db target listener-fun)))))
 
 (defn- patch-bindings!
   [!db ^js/HTMLElement element binds-diff-map]
@@ -381,7 +386,7 @@ from a set/coll of keywords.
             (if (and (util/can-watch? new-val) (not (satisfies? IBindValue new-val)))
               new-val
               (get-bind-watchable new-val !db))]
-        (listen k !db new-val watchable)))))
+        (bind k !db element watchable)))))
 
 (defn- patch-root-props!
   [!db ^js/ShadowRoot shadow-root ^js/ElementInternals internals props]
@@ -402,7 +407,9 @@ from a set/coll of keywords.
               (.setProperty style-obj (name k) (markup/clj->css-property new-val))))))
       (when-some [[_ css-prop] (get diff :#css)]
         (set! (.-adoptedStyleSheets shadow-root)
-          (->> (conj css-prop host-css) (mapv (partial get-stylesheet-object !db)) to-array)))
+          (->> (conj css-prop host-css)
+            (mapv (partial get-stylesheet-object !db))
+            to-array)))
       
       (patch-listeners! !db shadow-root (diff :#on))
 
@@ -436,14 +443,16 @@ from a set/coll of keywords.
     (swap! !private-state assoc ::props props))
   nil)
 
+(defn- normal-prop-name? [k]
+  (not (str/starts-with? (name k) "#")))
+
 (defn- patch-props!
   [!db ^js/HTMLElement element props]
   (let [!private-state (get-private-state element)
         diff (diff-props (::props @!private-state) props)]
     (when-not (empty? diff)
       ;; normal props
-      (doseq [[k [_old-val new-val]] diff
-              :when (and (nil? (namespace k)) (not (str/starts-with? (name k) "#")))]
+      (doseq [[k [_old-val new-val]] (filter #(normal-prop-name? (key %)) diff)]
         (set-prop! !db element k new-val))
 
       (patch-listeners! !db element (diff :#on))
@@ -505,7 +514,10 @@ from a set/coll of keywords.
         (let [host ^js/HTMLElement (.-host node)
               !host-state (get-private-state host)
               !static-state (get-private-state (.-constructor host))]
-          (swap! !host-state assoc ::connected false)
+          (rstore/patch! !db
+            {:path [::state ::dirty-elements]
+             :change [:clear host]})
+          (swap! !host-state assoc ::status :disconnected)
           (doseq [cleanup-fn (::cleanup-fns @!host-state)]
             (cleanup-fn))
           (swap! !host-state assoc ::cleanup-fns #{})
@@ -513,7 +525,7 @@ from a set/coll of keywords.
             (.dispatchEvent node (js/Event. "disconnect")))
           (swap! !static-state update ::instances disj host))
         
-        (and (hot-reload? !db) (= (.-nodeName node) "LINK")) 
+        (and (hot-reload-enabled? !db) (= (.-nodeName node) "LINK")) 
         (rstore/patch! !db
           {:path [::css-link-elements]
            :change [:clear node]})))
@@ -584,9 +596,8 @@ from a set/coll of keywords.
             (recur next-target-index (inc next-target-index))))))))
 
 (defn- patch-children!
-  [!db context ^js/Node node children]
+  [!db ^js/HTMLElement host ^js/Node node children]
   (let [document ^js/HTMLDocument (get-in @!db [::state ::document])
-        host ^js/HTMLElement (:#host context)
         host-state @(get-private-state host)
         disable-tags? (get-in @!db [::state ::disable-tags?])
         source-layout (-> node .-childNodes array-seq vec)
@@ -635,11 +646,11 @@ from a set/coll of keywords.
                                         (not= (:#tag props) (:#tag old-props)))
                                   (patch-props! !db child-element props)
                                   (when-not (:#opaque? props)
-                                    (patch-children! !db context child-element body)))
+                                    (patch-children! !db host child-element body)))
                                 [child-element])
 
                               (fn? vnode)
-                              (let [vdom (-> host-state ::prop-vals vnode (inj/apply-injections context))]
+                              (let [vdom (-> host-state ::prop-vals vnode)]
                                 (if (seq? vdom)
                                   (map process-children vdom)
                                   (process-children vdom)))
@@ -662,7 +673,7 @@ from a set/coll of keywords.
         preserved-child-doms (set target-layout)]
 
     ;; keep track of <link> elements, so we can make them react to hot reloads
-    (when (hot-reload? !db)
+    (when (hot-reload-enabled? !db)
       (doseq [child-node target-layout
               :when (and
                       (= (.-nodeName child-node) "LINK")
@@ -710,11 +721,10 @@ from a set/coll of keywords.
 
 
 (defn- patch-root!
-  [!db context vnode]
-  (let [host ^js/HTMLElement (:#host context)
-        shadow-root ^js/ShadowRoot (:#root context)
+  [!db ^js/HTMLElement host vnode]
+  (let [shadow-root ^js/ShadowRoot (.-shadowRoot host)
         !host-state (get-private-state host)
-        !static-state (-> context ^js/HTMLElement (:#host) .-constructor get-private-state)
+        !static-state (-> host .-constructor get-private-state)
         default-css (::default-css @!static-state)
         old-props (::props @!host-state)
         [props body] (cond
@@ -738,23 +748,23 @@ from a set/coll of keywords.
               (some? css) (conj default-css css)
               :else default-css))))
       (when-not (:#opaque? props)
-        (patch-children! !db context shadow-root body)))))
+        (patch-children! !db host shadow-root body)))))
 
 (defn- render-dirty-elements!
   [!db]
   (rstore/patch! !db
-    {:path [::pending-render-id]
+    {:path [::state ::pending-render-id]
      :change [:value nil]})
   
   (let [dirty-elements (get-in @!db [::state ::dirty-elements])]
-    (while (seq dirty-elements)
+    (when (seq dirty-elements)
       (rstore/patch! !db
         {:path [::dirty-elements]
          :change [:value #{}]})
       (doseq [^js/HTMLElement element (sort-by #(obj/get % render-order-sym) dirty-elements)
               :let [!element-state (get-private-state element)]
-              :when (::connected @!element-state)]
-        (let [!static-state (-> element .-constructor get-private-state)
+              :when (not= (::status @!element-state) :disconnected)]
+        (let [!static-state (-> element .-constructor get-private-state) 
               ^js/ShadowDom shadow (::shadow @!element-state)
               vdom-props (::props @!element-state)
               vdom (try
@@ -763,9 +773,7 @@ from a set/coll of keywords.
                        (log/error "Error in component view function"
                          :data {:component (::name @!static-state)}
                          :ex e)
-                       nil))
-              context {:#host element :#root shadow}
-              vdom (inj/apply-injections vdom context)]
+                       nil))]
 
           ;; if it needs to be focusable, but explicit tabIndex wasn't set
           (when (and
@@ -776,7 +784,7 @@ from a set/coll of keywords.
 
           ;; render the thing
           (try
-            (patch-root! !db context vdom)
+            (patch-root! !db element vdom)
             (catch :default ex
               (log/error "Error rendering component"
                 :data {:component (::name @!static-state)}
@@ -784,10 +792,10 @@ from a set/coll of keywords.
 
           ;; dispatch lifecycle events
           (let [event-type
-                (if (::connected @!element-state)
+                (if (= :connected (::status @!element-state))
                   "update"
                   (do
-                    (swap! !element-state assoc ::connected true)
+                    (swap! !element-state assoc ::status :connected)
                     "connect"))
                 
                 observed-events
@@ -813,10 +821,13 @@ from a set/coll of keywords.
        :change [:value (js/requestAnimationFrame (partial render-dirty-elements! !db))]})))
 
 (defn- update-element-class
-  [!db class
-   {:keys [props view focus inherit-doc-css? form-associated? extra-properties] component-name :name}]
+  [!db class component-name
+   {:keys [props view focus inherit-doc-css? form-associated? extra-properties]
+    :as component-spec}
+   old-component-spec]
   (let [^js proto (.-prototype class)
         !static-state (get-private-state class)
+        document (get-in @!db [::state ::document])
         attr->prop-spec (->> props vals
                           (keep
                             (fn [prop-spec]
@@ -845,7 +856,7 @@ from a set/coll of keywords.
                                (add-watch state watch-key
                                  (fn [_ _ _ new-val]
                                    (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)] new-val)
-                                   (when (::connected @!instance-state)
+                                   (when (not= :disconnected (::status @!instance-state))
                                      (invalidate! !db instance))))
                                (when (satisfies? IDeref state)
                                  (swap! !instance-state update ::prop-vals assoc (:prop prop-spec) @state))
@@ -859,7 +870,7 @@ from a set/coll of keywords.
                                (attr-reader (:attr prop-spec) component-name)))))))
         default-css (cond-> [default-stylesheet]
                       inherit-doc-css?
-                      (into (->> (js/document.querySelectorAll "link[rel=\"stylesheet\"]")
+                      (into (->> (.querySelectorAll document "link[rel=\"stylesheet\"]")
                               .values es6-iterator-seq
                               (map (fn [^js/HTMLElement link] (.-href link)))
                               (remove str/blank?)
@@ -873,6 +884,11 @@ from a set/coll of keywords.
     ;; If this component's fields have been indexed,
     ;; remove it from the index since its fields may have changed
     (purge-fields-index-for-class !db class)
+    
+    ;; Delete properties on the prototype.
+    (doseq [property-name (::removable-properties @!static-state)]
+      (js-delete proto property-name)) 
+    (swap! !static-state assoc ::removable-properties #{})
 
     (js/Object.defineProperties
       class
@@ -889,8 +905,9 @@ from a set/coll of keywords.
           #js{:value
               (fn []
                 (let [^js/Node this (js* "this")]
-                  (when-not (::connected @(get-private-state this))
+                  (when (= :disconnected (::status @(get-private-state this)))
                     (swap! !static-state update ::instances conj this)
+                    (swap! (get-private-state this) assoc ::status :connecting)
                     (init-props this)
                     (invalidate! !db this))))
               :configurable true}
@@ -912,7 +929,7 @@ from a set/coll of keywords.
                     (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)]
                       (some-> new-val
                         (attr-reader attr-name component-name)))
-                    (when (::connected @!instance-state)
+                    (when-not (= :disconnected (::status @!instance-state))
                       (invalidate! !db instance)))))
               :configurable true}
 
@@ -925,8 +942,11 @@ from a set/coll of keywords.
           #js{:value component-name
               :writable false
               :configurable true}})
+    
     (doseq [prop-spec (filter :field (vals props))
-            :let [prop-name (:prop prop-spec)]]
+            :let [prop-name (:prop prop-spec)]] 
+      (swap! !static-state update ::removable-properties conj (:field prop-spec))
+      
       (js/Object.defineProperty
         proto
         (:field prop-spec)
@@ -937,13 +957,42 @@ from a set/coll of keywords.
             (if (:state-factory prop-spec)
               (js* "undefined")
               (fn [x]
-                (let [!instance-state (-> (js* "this") get-private-state)]
+                (let [instance (js* "this")
+                      !instance-state (-> instance get-private-state)]
                   (when-not (identical? x (get-in @!instance-state [::prop-vals prop-name]))
                     (swap! !instance-state assoc-in [::prop-vals prop-name] x)
-                    (when (::connected @!instance-state)
-                      (invalidate! !db (js* "this")))))))
+                    (when (not= :disconnected (::status @!instance-state))
+                      (invalidate! !db instance))))))
             :configurable true}))
-    (doseq [instance (::instances @!static-state)]
+    
+    (doseq [[property-name {:keys [get set value writable?]}] extra-properties]
+      (swap! !static-state update ::removable-properties conj (name property-name))
+      
+      (js/Object.defineProperty
+        proto
+        (name property-name)
+        #js{:get get :set set :value value :writable writable?}))
+    
+    (doseq [instance (::instances @!static-state)
+            :let [!instance-state (get-private-state instance)]]
+      (swap! !instance-state update ::prop-vals
+        (fn [prop-vals]
+          (let [new-spec-props (:props component-spec)
+                old-spec-props (:props old-component-spec)]
+            (reduce-kv
+              (fn [m k _v]
+                (cond
+                  (or
+                    (not (contains? new-spec-props k))
+                    (and (:state-factory new-spec-props) (nil? (:state-factory old-spec-props))))
+                  (dissoc m k)
+                  
+                  (or
+                    (not (contains? old-spec-props k))
+                    (and (nil? (:state-factory new-spec-props)) (:state-factory old-spec-props)))
+                  (assoc m k (get (::props @!instance-state) k))))
+              prop-vals
+              prop-vals))))
       (init-props instance)
       (invalidate! !db instance))))
 
@@ -951,11 +1000,13 @@ from a set/coll of keywords.
 (defonce ^:private !render-order-seq (atom 0))
 
 (defn- update-component
-  [!db
-   {focus :focus component-name :name :as things}]
-  (let [el-name (markup/kw->el-name component-name)]
-    (if-let [existing (js/customElements.get el-name)]
-      (update-element-class !db existing things)
+  [!db component-name
+   {focus :focus :as component-spec}
+   old-component-spec]
+  (let [el-name (markup/kw->el-name component-name)
+        registry ^js/CustomElementRegistry (get-in @!db [::state ::registry])]
+    (if-let [existing (.get registry el-name)]
+      (update-element-class !db existing component-name component-spec old-component-spec)
       (let [new-class (js* "(class extends HTMLElement {
                                 constructor() {
                                     super();
@@ -983,7 +1034,8 @@ from a set/coll of keywords.
                      ::internals (.attachInternals instance)
                      ::prop-vals {}
                      ::lifecycle-event-listener-counts {}
-                     ::doms-on-focus-path #{}})
+                     ::doms-on-focus-path #{}
+                     ::status :disconnected})
                   
                   (obj/set instance render-order-sym (swap! !render-order-seq inc))
                   
@@ -1034,8 +1086,8 @@ from a set/coll of keywords.
                               :writable false}}))))
               :configurable false
               :writable false})
-        (update-element-class !db new-class things)
-        (js/customElements.define el-name new-class))))
+        (update-element-class !db new-class component-name component-spec old-component-spec)
+        (.define registry el-name new-class))))
   nil)
 
 (defn- start-hot-reload-observer!
@@ -1099,12 +1151,12 @@ from a set/coll of keywords.
 
 (defn install!
   [!db ^js/HTMLDocument doc ^js/CustomElementRegistry cer
-   & {:keys [event-harvester hot-reload? disable-tags?]}]
+   & {:keys [hot-reload? disable-tags?]}]
   {:pre [(instance? js/HTMLDocument doc)
          (some? (::component-registry-plugin/state @!db))]}
-  (engine/install-plugin! !db ::state
+  (core/install-plugin! !db ::state
     (fn web-components-plugin
-      [^IStore !db]
+      [!db]
       {::hot-reload? (if (some? hot-reload?) hot-reload? DEBUG)
        ::disable-tags? (if (some? disable-tags?) disable-tags? DEBUG)
        ::document doc
@@ -1113,15 +1165,14 @@ from a set/coll of keywords.
        ::css-link-elements #{}
        ::css-stylesheet-objects {}
        ::href-overrides {}
-       ::event-harvester event-harvester
        ::dirty-elements #{}
        ::pending-render-id nil
        ::render-order-seq 0
        
-       ::engine/init
+       ::core/init
        (fn web-components-plugin-init
          []
-         (when (hot-reload? !db)
+         (when (hot-reload-enabled? !db)
            (start-hot-reload-observer! !db))
          
          ;; preemptively index some classes
@@ -1136,19 +1187,23 @@ from a set/coll of keywords.
                (doseq [[component-name component-spec] new-val
                        :let [old-component-spec (get old-val component-name)]
                        :when (not (identical? old-component-spec component-spec))]
-                 (update-component !db component-spec))))
+                 (update-component !db component-name component-spec old-component-spec))))
            
            ;; handle existing component registrations
-           (doseq [component-spec (vals (get-in @!db components-path))]
-             (update-component !db component-spec))))
+           (doseq [[component-name component-spec] (get-in @!db components-path)]
+             (update-component !db component-name component-spec nil))))
        
-       ::engine/finl
+       ::core/finl
        (fn web-components-plugin-finl
          []
          (log/warn "Requested removal of web components plugin, but custom element registrations can't be removed cleanly.")
-         (when (hot-reload? !db)
+         (when (hot-reload-enabled? !db)
            (stop-hot-reload-observer! !db))
          (when-let [render-id (get-in @!db [::state ::pending-render-id])]
            (js/cancelAnimationFrame render-id))
          ;; TODO: see if we can clean up the classes enough that they can be reused
          )})))
+
+(defn remove!
+  [!db]
+  (core/remove-plugin! !db ::state))

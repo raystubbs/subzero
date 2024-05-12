@@ -1,6 +1,7 @@
 (ns subzero.core
   (:require
-   [subzero.rstore :as rstore]))
+   [subzero.rstore :as rstore]
+   [subzero.impl.markup :as markup]))
 
 (defn create-db
   []
@@ -17,9 +18,9 @@
 (defn install-plugin!
   [!db k plugin-fn]
   (let [plugin-state (plugin-fn !db)]
+    (rstore/patch! !db {:path [k] :change [:value plugin-state]})
     (when (fn? (::init plugin-state))
-      ((::init plugin-state)))
-    (rstore/patch! !db {:path [k] :change [:value plugin-state]}))
+      ((::init plugin-state))))
   nil)
 
 (defn remove-plugin!
@@ -28,4 +29,8 @@
     (when (fn? (::finl plugin-state))
       ((::finl plugin-state)))
     (rstore/patch! !db {:path [] :change [:clear k]})))
+
+(defn element-name
+  [kw]
+  (markup/kw->el-name kw))
 
