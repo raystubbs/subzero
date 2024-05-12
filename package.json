@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "test": "shadow-cljs compile browser-tests node-tests && web-test-runner \"target/browser-tests/all.js\" --node-resolve && node target/node-tests.js"
+  },
+  "devDependencies": {
+    "@web/test-runner": "^0.18.1",
+    "shadow-cljs": "^2.28.4"
+  }
+}
