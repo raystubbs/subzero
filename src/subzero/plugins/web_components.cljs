@@ -33,7 +33,7 @@ State lives at `::state` in the db, and has:
    [subzero.impl.util :as util]
    [subzero.impl.markup :as markup]
    [subzero.logger :as log]
-   [subzero.plugins.component-registry :as component-registry-plugin]
+   [subzero.plugins.component-registry :as component-registry]
    [goog :refer [DEBUG]]
    [goog.object :as obj]
    [clojure.string :as str]
@@ -239,7 +239,7 @@ when the asset changes on disk.
     (let [adjusted-value (adjusted-prop-value !db prop-name value)
           component-name (or (.-componentName element) (-> element .-nodeName str/lower-case keyword)) 
           attr-name (name prop-name)
-          attr-value ((component-registry-plugin/get-attribute-writer !db component-name)
+          attr-value ((component-registry/get-attribute-writer !db component-name)
                       adjusted-value attr-name component-name)]
       (cond
         (true? attr-value)
@@ -844,7 +844,7 @@ from a set/coll of keywords.
                           (into {}))
         init-props (fn [^js/Node instance]
                      (let [!instance-state (get-private-state instance)
-                           attr-reader (component-registry-plugin/get-attribute-reader !db component-name)]
+                           attr-reader (component-registry/get-attribute-reader !db component-name)]
                        (doseq [prop-spec (vals props)
                                :when (not (contains? (::prop-vals @!instance-state) (:prop prop-spec)))]
                          (cond
@@ -932,7 +932,7 @@ from a set/coll of keywords.
               (fn [attr-name _old-val new-val]
                 (let [^js/Node instance (js* "this")
                       !instance-state (get-private-state instance)
-                      attr-reader (component-registry-plugin/get-attribute-reader !db component-name)]
+                      attr-reader (component-registry/get-attribute-reader !db component-name)]
                   (when-let [prop-spec (get attr->prop-spec attr-name)]
                     (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)]
                       (some-> new-val
@@ -1161,7 +1161,7 @@ from a set/coll of keywords.
   [!db ^js/HTMLDocument doc ^js/CustomElementRegistry cer
    & {:keys [hot-reload? disable-tags?]}]
   {:pre [(instance? js/HTMLDocument doc)
-         (some? (::component-registry-plugin/state @!db))]}
+         (some? (::component-registry/state @!db))]}
   (core/install-plugin! !db ::state
     (fn web-components-plugin
       [!db]
@@ -1187,7 +1187,7 @@ from a set/coll of keywords.
          (get-fields-index-for-class !db js/HTMLElement)
          (get-fields-index-for-class !db js/ElementInternals)
          
-         (let [components-path [::component-registry-plugin/state ::component-registry-plugin/components]]
+         (let [components-path [::component-registry/state ::component-registry/components]]
            ;; watch for new component registrations
            (rstore/watch !db ::components components-path
              (fn [old-val new-val _changed-paths]

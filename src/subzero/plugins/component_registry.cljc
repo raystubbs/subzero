@@ -98,6 +98,7 @@
   (let [{writers ::attribute-writers
          !cache ::attribute-writers-cache} (get @!db ::state)]
     (or (get-hierarchically writers !cache component-name)
+      (:default writers)
       default-attribute-writer)))
 
 (defn- default-attribute-reader
@@ -109,6 +110,7 @@
   (let [{readers ::attribute-readers
          !cache ::attribute-readers-cache} (get @!db ::state)]
     (or (get-hierarchically readers !cache component-name)
+      (:default readers)
       default-attribute-reader)))
 
 (defn install!
