@@ -4,7 +4,8 @@
    [subzero.plugins.component-registry
     :refer [reg-component]
     :as component-registry]
-   [subzero.plugins.web-components :as web-components]))
+   [subzero.plugins.web-components :as web-components]
+   [subzero.logger :as log]))
 
 (defn do-steps [zero-element & step-fns]
   (if (empty? step-fns)
@@ -100,7 +101,13 @@
             (assert (= "BAR" (-> el .-shadowRoot .-firstChild .-value)))
             (reset! !atom "BAZ"))
           (fn [^js/HTMLElement el]
-            (assert (= "BAZ" (-> el .-shadowRoot .-firstChild .-value)))))))
+            (assert (= "BAZ" (-> el .-shadowRoot .-firstChild .-value))))
+          (fn [^js/HTMLElement el]
+            (set! (.-vdom el) [:input]))
+          (fn [_]
+            (reset! !atom "FOO"))
+          (fn [^js/HTMLElement el]
+            (assert (= "" (-> el .-shadowRoot .-firstChild .-value)))))))
     
     (js/it "listens to events"
       (let [!atom (atom nil)]
@@ -123,4 +130,21 @@
               (set! (.-value input-el) "BAZ")
               (.dispatchEvent input-el (js/InputEvent. "input"))))
           (fn [^js/HTMLElement _el]
-            (assert (= @!atom "BAR"))))))))
+            (assert (= @!atom "BAR"))))))
+    
+    (js/it "disconnects"
+      (let [!disconnected? (atom false)]
+        (step-test
+          #(create-element ::echo)
+          (fn [^js/HTMLElement el]
+            (set! (.-vdom el)
+              [::echo
+               :vdom
+               [:root>
+                :#on {:disconnect #(reset! !disconnected? true)}]]))
+          (fn [^js/HTMLElement el]
+            (set! (.-vdom el) nil))
+          (fn [_]
+            (js/Promise. (fn [resolve] (js/setTimeout resolve 10))))
+          (fn [_]
+            (assert (true? @!disconnected?))))))))

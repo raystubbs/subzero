@@ -34,3 +34,48 @@
   [kw]
   (markup/kw->el-name kw))
 
+#?(:cljs
+   (do
+     (defn js-proxy [x & {:keys [get]}]
+       (js* "new Proxy(~{}, ~{})" x #js{:get get}))
+     
+     (def ^:private iequiv-prop "cljs$core$IEquiv$_equiv$arity$2")
+     (defonce ^:private key-eq-sym (js/Symbol "equivKey"))
+     
+     (defn with-ident-eq "
+     Returns a version of `x` with IEquiv overridden with
+     an identity check.  Useful to avoid comparison overhead
+     when passing large collections as web component props.
+     "
+       [x]
+       (js-proxy x
+         :get
+         (fn [target prop receiver]
+           (if (= prop iequiv-prop)
+             identical?
+             (js/Reflect.get target prop receiver)))))
+     
+     (defn with-const-eq "
+     Returns a version of `x` with IEquiv overridden to compare
+     against a given constant.  Meant to help optimize prop
+     comparisons for large collections.
+     " [k x]
+       (letfn [(equiv-fn [_ other]
+                 (let [other-k (js* "~{}[~{}]" other key-eq-sym)]
+                   (and
+                     (not= (js* "undefined") other-k)
+                     (= k other-k))))]
+         (js-proxy x
+           :get
+           (fn [target prop receiver]
+             (cond
+               (= key-eq-sym prop)
+               k
+               
+               (= iequiv-prop prop)
+               equiv-fn
+               
+               :else
+               (js/Reflect.get target prop receiver))))))
+     nil))
+

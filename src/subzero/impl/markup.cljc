@@ -52,43 +52,6 @@ tag.
   (extract-tag-props
     [:div#my-thing.foo.bar {:#class "something"} (list "body")]))
 
-(defn rewrite-props "
-Given a normalized vnode, rewrites `:zero.core/*` prop keys
-as `:#*`, and removes any keys with other namespaces,
-and any non-keyword keys.
-" [vnode]
-  (update vnode 1
-    (fn [props]
-      (reduce-kv
-        (fn reducer [props k v]
-          (cond
-            (not (keyword? k))
-            (dissoc props k)
-            
-            (= :zero.core/internals k)
-            (-> props
-              (dissoc k)
-              (assoc :#internals
-                (reduce-kv
-                  (fn [internals k v]
-                    (cond-> internals
-                      (and (keyword? k) (= "zero.core" (namespace k)))
-                      (-> (dissoc k) (assoc (keyword (str "#" (name k))) v))))
-                  (:zero.core/internals props)
-                  (:zero.core/internals props))))
-            
-            (= "zero.core" (namespace k))
-            (-> props
-              (dissoc k)
-              (assoc (keyword (str "#" (name k))) v))
-            
-            (namespace k)
-            (dissoc props k)
-            
-            :else
-            props))
-        props props))))
-
 (defn preproc-vnode "
 Simplifies the vnode, parsing out the classes and id from
 the tag, and converting compound tags (i.e `[:div :span]`)
@@ -112,7 +75,6 @@ one sequence.
                  (extract-tag-props [middle-tag {} (list m)]))
                (extract-tag-props [(last tag-or-tags) (dissoc props :#key) body])
                (-> tag-or-tags butlast rest)))]))
-      rewrite-props
       extract-tag-props)))
 
 (comment
