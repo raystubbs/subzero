@@ -181,34 +181,39 @@ change tracking patches.
     (into [:tree :sub] (interpose :sub path))))
 
 (defn patch!
-  [!rstore patch]
+  [!rstore patch & {:keys [when]}]
   {:pre [(::rstore? (meta !rstore))]}
-  (swap-vals! !rstore
-    (fn [basis]
-      (let [rstore-meta (meta !rstore)
-            watches (-> basis meta ::watches)
-            operators (::operators rstore-meta)
-            [patched changed-paths] (calc-patch operators basis patch)
-            changed-paths (set changed-paths)
-            
-            affected-paths
-            (set (mapcat (partial all-paths-affected-by-change-at
-                           (:tree watches))
-                   changed-paths))
-            
-            affected-watchers
-            (mapcat
-              (fn [affected-path] 
-                (->> (get-in watches (path->watch-node-path affected-path))
-                  :watch-keys
-                  (map
-                    (fn [watch-key]
-                      (get-in watches [:watchers watch-key])))))
-              affected-paths)]
-        (vary-meta patched assoc
-          ::affected-watchers affected-watchers
-          ::changed-paths changed-paths
-          ::watches watches)))))
+  (let [[old new :as r]
+        (swap-vals! !rstore
+          (fn [basis]
+            (if (and (ifn? when) (not (when basis)))
+              basis
+              (let [rstore-meta (meta !rstore)
+                    watches (-> basis meta ::watches)
+                    operators (::operators rstore-meta)
+                    [patched changed-paths] (calc-patch operators basis patch)
+                    changed-paths (set changed-paths)
+                    
+                    affected-paths
+                    (set (mapcat (partial all-paths-affected-by-change-at
+                                   (:tree watches))
+                           changed-paths))
+                    
+                    affected-watchers
+                    (mapcat
+                      (fn [affected-path] 
+                        (->> (get-in watches (path->watch-node-path affected-path))
+                          :watch-keys
+                          (map
+                            (fn [watch-key]
+                              (get-in watches [:watchers watch-key])))))
+                      affected-paths)]
+                (vary-meta patched assoc
+                  ::affected-watchers affected-watchers
+                  ::changed-paths changed-paths
+                  ::watches watches)))))]
+    (when-not (identical? old new)
+      r)))
 
 (defn watch
   [!rstore k path f]

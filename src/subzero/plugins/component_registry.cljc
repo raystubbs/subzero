@@ -49,7 +49,8 @@
           (into {}))]
     (rstore/patch! !db
       {:path [::state ::components component-name]
-       :change [:value (assoc spec :props normalized-props)]})))
+       :change [:value (assoc spec :props normalized-props)]}))
+  nil)
 
 
 (defn reg-attribute-writers

@@ -43,12 +43,12 @@ State lives at `::state` in the db, and has:
   [s]
   (doto (js/CSSStyleSheet.) (.replace s)))
 
-(def ^:private private-state-sym (js/Symbol "subzeroWebComponentsPrivate"))
-(def ^:private render-order-sym (js/Symbol "subzeroWebComponentsRenderOrder"))
+(defonce ^:private private-state-sym (js/Symbol "subzeroWebComponentsPrivate"))
+(defonce ^:private render-order-sym (js/Symbol "subzeroWebComponentsRenderOrder"))
 (defonce ^:private html-ns "http://www.w3.org/1999/xhtml")
 (defonce ^:private svg-ns "http://www.w3.org/2000/svg")
-(def ^:private default-stylesheet (compile-css ":host { display: contents; }"))
-(def ^:private js-undefined (js* "undefined"))
+(defonce ^:private default-stylesheet (compile-css ":host { display: contents; }"))
+(defonce ^:private js-undefined (js* "undefined"))
 
 (defn- get-private-state [^js/Object obj]
   (or (obj/get obj private-state-sym)
@@ -102,7 +102,7 @@ State lives at `::state` in the db, and has:
 
 (defn- doc-origin
   [!db]
-  (-> !db ::state ^js/HTMLDocument (::document) .-location .-origin))
+  (-> @!db ::state ^js/HTMLDocument (::document) .-location .-origin))
 
 (defn- absolute-url
   [!db url]
@@ -461,7 +461,7 @@ from a set/coll of keywords.
     (when-not (empty? diff)
       ;; normal props
       (doseq [[k [_old-val new-val]] (filter #(normal-prop-name? (key %)) diff)]
-        (set-prop! !db element k new-val))
+        (set-element-prop! !db element k new-val))
 
       (patch-listeners! !db element (diff :#on))
       (patch-bindings! !db element (diff :#bind))
@@ -559,10 +559,10 @@ from a set/coll of keywords.
       (.call focus-fn dom)
 
       (instance? js/ShadowRoot dom)
-      (some-> dom .-host (try-pass-focus! !db))
+      (some->> dom .-host (try-pass-focus! !db))
 
       (not (identical? (.-body ^js/HTMLDocument (get-in @!db [::state ::document])) dom))
-      (some-> dom .-parentNode (try-pass-focus! !db)))))
+      (some->> dom .-parentNode (try-pass-focus! !db)))))
 
 (defn- apply-layout-changes!
   [^js/HTMLElement element start-index stop-index child-dom->source-index target-layout]
@@ -911,7 +911,7 @@ from a set/coll of keywords.
                                  (swap! !instance-state update ::prop-vals assoc (:prop prop-spec) @state))
                                (swap! !instance-state update ::cleanup-fns (fnil conj #{}) cleanup-fn))
                              (catch :default e
-                               (js/console.error "Error initializing state prop" e)))
+                               (log/error "Error initializing state prop" :ex e)))
 
                            (and (:attr prop-spec) (-> @!instance-state ::prop-vals (contains? (:prop prop-spec)) not))
                            (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)]

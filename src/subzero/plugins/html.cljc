@@ -3,11 +3,12 @@ HTML rendering.
 "
   (:require
    [clojure.string :as str]
-   [subzero.impl.markup :refer [preproc-vnode clj->css-property kw->el-name flatten-body]] 
+   [subzero.impl.markup :refer [clj->css-property kw->el-name flatten-body]] 
    [subzero.impl.util :refer [str-writer str-writer->str write] :as base]
    [subzero.plugins.component-registry :as component-registry]
    [subzero.core :as core]
-   [subzero.logger :as log])
+   [subzero.logger :as log]
+   [subzero.impl.markup :as markup])
   #?(:clj
      (:import
       [java.net URI URL])))
@@ -20,34 +21,10 @@ HTML rendering.
     (let [spec-props (if (set? (:props spec))
                        (into {} (map (juxt identity (constantly :default)) (:props spec)))
                        (:props spec))
-          view-props (->> spec-props
-                       (keep
-                         (fn [[k v]]
-                           (cond
-                             (or
-                               (= v :default)
-                               (= v :field)
-                               (and
-                                 (map? v)
-                                 (string? (:field v))
-                                 (not (:state v))
-                                 (not (:state-factory v))))
-                             [k (get markup-props (-> k name str/lower-case))]
-
-                             (or
-                               (= v :attr)
-                               (and
-                                 (map? v)
-                                 (string? (:attr v))
-                                 (not (:state v))
-                                 (not (:state-factory v))))
-                             (let [writer (component-registry/get-attribute-reader !db tag)
-                                   reader (component-registry/get-attribute-reader !db tag)]
-                               [k (reader (writer (get markup-props (-> k name str/lower-case))))])
-
-                             (:state v)
-                             [k (base/try-deref v)])))
-                       (into {}))
+          preproc-vnode (get-in @!db [::state ::preproc-vnode])
+          view-props (update-vals spec-props
+                       (fn [prop-spec]
+                         (get markup-props (-> prop-spec :prop name str/lower-case))))
           view-result ((:view spec) view-props)
           [shadow-root-props
            shadow-root-body] (cond
@@ -105,7 +82,8 @@ HTML rendering.
   [!db w vnode opts]
   (cond
     (vector? vnode)
-    (let [[tag props body] (preproc-vnode vnode)
+    (let [preproc-vnode (get-in @!db [::state ::preproc-vnode])
+          [tag props body] (preproc-vnode vnode)
           write-attribute (component-registry/get-attribute-writer !db tag)
           props (normalize-prop-names props)
           needs-id? (some some? (concat (vals (:#bind props)) (vals (:#on props))))
@@ -200,11 +178,14 @@ Format markup as an HTML string.
 
 (defn install!
   [!db
-   & {:keys [render-listener render-binding]}]
+   & {:keys [render-listener render-binding preproc-vnode]}]
   (core/install-plugin! !db ::state
     (fn html-plugin [_]
       {::render-listener render-listener
-       ::render-binding render-binding})))
+       ::render-binding render-binding
+       ::preproc-vnode (if preproc-vnode
+                         (comp preproc-vnode markup/preproc-vnode)
+                         markup/preproc-vnode)})))
 
 (defn remove!
   [!db]
