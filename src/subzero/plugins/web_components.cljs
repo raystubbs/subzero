@@ -225,7 +225,7 @@ when the asset changes on disk.
   {:pre [(keyword? prop-name)]}
   (when-let [field-name (-> (get-fields-index-for-object !db obj) (get prop-name))]
     (obj/set obj field-name value)
-    false))
+    true))
 
 (defn- get-prop
   [!db ^js/Object obj prop-name]
