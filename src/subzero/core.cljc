@@ -16,19 +16,27 @@
   (rstore/patch! !db {:path [] :change [:value {}]}))
 
 (defn install-plugin!
-  [!db k plugin-fn]
-  (let [plugin-state (plugin-fn !db)]
-    (rstore/patch! !db {:path [k] :change [:value plugin-state]})
-    (when (fn? (::init plugin-state))
-      ((::init plugin-state))))
+  [!db k plugin-fn & {:keys [ignore-if-already-installed?]}]
+  (cond
+    (rstore/patch! !db {:path [k] :change [:value ::pending]} :when #(= ::none (get % k ::none)))
+    (let [plugin-state
+          (locking !db
+            (let [plugin-state (plugin-fn !db)]
+              (rstore/patch! !db {:path [k] :change [:value plugin-state]})
+              plugin-state))]
+      (when (fn? (::init plugin-state))
+        ((::init plugin-state))))
+
+    (not ignore-if-already-installed?)
+    (throw (ex-info "Plugin with given key already installed" {:key k})))
   nil)
 
 (defn remove-plugin!
   [!db k]
-  (when-let [plugin-state (get @!db k)]
-    (when (fn? (::finl plugin-state))
-      ((::finl plugin-state)))
-    (rstore/patch! !db {:path [] :change [:clear k]})))
+  (let [[old-db _] (rstore/patch! !db {:path [] :change [:clear k]})]
+    (when-let [plugin-state (get old-db k)]
+      (when (fn? (::finl plugin-state))
+        ((::finl plugin-state))))))
 
 (defn element-name
   [kw]

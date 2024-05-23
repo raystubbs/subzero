@@ -103,8 +103,7 @@ change tracking patches.
 
 (defn rstore?
   [x]
-  (when (satisfies? IMeta x)
-    (-> x meta ::rstore?)))
+  (boolean (some-> x meta ::rstore?)))
 
 (defn rstore
   [x & {:keys [operators extra-operators validator]}]

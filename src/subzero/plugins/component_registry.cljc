@@ -37,7 +37,7 @@
   [!db component-name
    & {:keys [view props] :as spec}]
   {:pre [(ifn? view)
-         (or (map? props) (set? props))
+         (or (nil? props) (map? props) (set? props))
          (keyword? component-name)
          (= (str component-name) (str/lower-case (str component-name)))]}
   (let [normalized-props
@@ -52,14 +52,14 @@
        :change [:value (assoc spec :props normalized-props)]}))
   nil)
 
-
 (defn reg-attribute-writers
   [!db & {:as attribute-writers}]
   (rstore/patch! !db
     [{:path [::state ::attribute-writers]
       :change [:into attribute-writers]}
      {:path [::state ::attribute-writers-cache]
-      :change [:value (atom {})]}]))
+      :change [:value (atom {})]}])
+  nil)
 
 (defn reg-attribute-readers
   [!db & {:as attribute-readers}]
@@ -67,7 +67,8 @@
     [{:path [::state ::attribute-readers]
       :change [:into attribute-readers]}
      {:path [::state ::attribute-readers-cache]
-      :change [:value (atom {})]}]))
+      :change [:value (atom {})]}])
+  nil)
 
 (defn- get-hierarchically
   [m !cache k]
@@ -115,7 +116,7 @@
       default-attribute-reader)))
 
 (defn install!
-  [!db]
+  [!db & {:as opts}]
   (core/install-plugin! !db ::state
     (fn component-registry-plugin
       [!db]
@@ -123,7 +124,8 @@
        ::attribute-readers-cache (atom {})
        ::attribute-writers {}
        ::attribute-writers-cache (atom {})
-       ::components {}})))
+       ::components {}})
+    opts))
 
 (defn remove!
   [!db]

@@ -1,7 +1,6 @@
 (ns ^:no-doc subzero.impl.markup
   (:require
-   [clojure.string :as str]
-   [subzero.logger :as log]))
+   [clojure.string :as str]))
 
 (defn flatten-body [body]
   (mapcat

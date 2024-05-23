@@ -502,7 +502,21 @@ from a set/coll of keywords.
     (doseq [[k listener] (:#on props)]
       (when (some? listener)
         (unlisten k !db node)))
-    (swap! !private-state update ::props dissoc :#bind :#on))
+    (swap! !private-state update ::props dissoc :#bind :#on)
+
+    ;; SubZero components
+    (when (some? (::status @!private-state))
+      (let [shadow-root (.-shadowRoot node)
+            !static-state (get-private-state (.-constructor node))]
+        (some-> @!private-state ::render-vdom-timeout js/clearTimeout)
+        (swap! !private-state assoc ::status :disconnected)
+        (doseq [cleanup-fn (::cleanup-fns @!private-state)]
+          (cleanup-fn))
+        (swap! !private-state assoc ::cleanup-fns #{})
+        (when (pos? (get-in @!private-state [::lifecycle-event-listener-counts "disconnect"]))
+          (.dispatchEvent shadow-root (js/Event. "disconnect")))
+        (swap! !static-state update ::instances disj node)
+        (prepare-node-for-removal! !db shadow-root))))
 
   (doseq [child-dom (-> node .-childNodes array-seq)]
     (prepare-node-for-removal! !db child-dom))
@@ -512,25 +526,6 @@ from a set/coll of keywords.
       {:path [::css-link-elements]
        :change [:clear node]}))
   nil)
-
-(defn- disconnect!
-  [!db ^js/HTMLElement element]
-  (let [shadow-root (.-shadowRoot element)
-        !private-state (get-private-state element)
-        !static-state (get-private-state (.-constructor element))]
-    (rstore/patch! !db
-      {:path [::state ::dirty-elements]
-       :change [:clear element]})
-    (swap! !private-state assoc ::status :disconnected)
-    (doseq [cleanup-fn (::cleanup-fns @!private-state)]
-      (cleanup-fn))
-    (swap! !private-state assoc ::cleanup-fns #{})
-    (when (pos? (get-in @!private-state [::lifecycle-event-listener-counts "disconnect"]))
-      (.dispatchEvent shadow-root (js/Event. "disconnect")))
-    (swap! !static-state update ::instances disj element)
-    (doseq [child-node (-> shadow-root .-childNodes array-seq)]
-      (prepare-node-for-removal! !db child-node))
-    nil))
 
 (defn- insert-child!
   [^js/Node dom ^js/Node reference ^js/Node child]
@@ -756,9 +751,13 @@ from a set/coll of keywords.
 
 (defn- expire-elements!
   [!db]
-  (doseq [element (get-in @!db [::state ::disconnect-elements])]
-    (when-not (.-isConnected element)
-      (disconnect! !db element))))
+  (doseq [element (get-in @!db [::state ::disconnect-elements])
+          :when (not (.-isConnected element))]
+    (prepare-node-for-removal! !db element))
+  (rstore/patch! !db
+    {:path [::state ::disconnect-elements]
+     :change [:value #{}]})
+  nil)
 
 (defn- render-vdom!
   [^js/HTMLElement element]
@@ -783,7 +782,6 @@ from a set/coll of keywords.
       (before-render !db)
       (catch :default ex
         (log/error "Error in before-render callback" :ex ex))))
-  
   (rstore/patch! !db
     {:path [::state ::pending-render-id]
      :change [:value nil]})
@@ -842,7 +840,6 @@ from a set/coll of keywords.
               (log/error "Error rendering component"
                 :data {:component (::name @!static-state)}
                 :ex ex)))))))
-  
   (js/setTimeout
     (fn []
       (expire-elements! !db)
@@ -990,11 +987,11 @@ from a set/coll of keywords.
           #js{:value component-name
               :writable false
               :configurable true}})
-    
+
     (doseq [prop-spec (filter :field (vals props))
-            :let [prop-name (:prop prop-spec)]] 
+            :let [prop-name (:prop prop-spec)]]
       (swap! !static-state update ::removable-properties conj (:field prop-spec))
-      
+
       (js/Object.defineProperty
         proto
         (:field prop-spec)
@@ -1011,7 +1008,7 @@ from a set/coll of keywords.
                     (swap! !instance-state assoc-in [::prop-vals prop-name] x)
                     (invalidate! !db instance false)))))
             :configurable true}))
-    
+
     (doseq [[property-name {:keys [get set value writable?]}] extra-properties]
       (swap! !static-state update ::removable-properties conj (name property-name))
       
@@ -1171,7 +1168,7 @@ from a set/coll of keywords.
                  :when (local-url? !db created-link-url)]
            
            (rstore/patch! !db
-             {:path [::href-overrides]
+             {:path [::state ::href-overrides]
               :change [:assoc (.-pathname created-link-url) (str created-link-url)]})
            
            (doseq [^js/Node matching-link (get @path->css-link-elements (.-pathname created-link-url))] 
@@ -1202,7 +1199,7 @@ from a set/coll of keywords.
 (defn install!
   [!db ^js/HTMLDocument doc ^js/CustomElementRegistry cer
    & {:keys [hot-reload? disable-tags? preproc-vnode
-             after-render before-render]}]
+             after-render before-render] :as opts}]
   {:pre [(instance? js/HTMLDocument doc)
          (some? (::component-registry/state @!db))]}
   (core/install-plugin! !db ::state
@@ -1230,12 +1227,17 @@ from a set/coll of keywords.
        (fn web-components-plugin-init
          []
          (when (hot-reload-enabled? !db)
-           (start-hot-reload-observer! !db))
-         
+           (if (= (.-readyState doc) "complete")
+             (start-hot-reload-observer! !db)
+             (.addEventListener (.-defaultView doc) "load"
+               (fn []
+                 (start-hot-reload-observer! !db))
+               #js{:once true})))
+
          ;; preemptively index some classes
          (get-fields-index-for-class !db js/HTMLElement)
          (get-fields-index-for-class !db js/ElementInternals)
-         
+
          (let [components-path [::component-registry/state ::component-registry/components]]
            ;; watch for new component registrations
            (rstore/watch !db ::components components-path
@@ -1245,11 +1247,11 @@ from a set/coll of keywords.
                        :let [old-component-spec (get old-val component-name)]
                        :when (not (identical? old-component-spec component-spec))]
                  (update-component !db component-name component-spec old-component-spec))))
-           
+
            ;; handle existing component registrations
            (doseq [[component-name component-spec] (get-in @!db components-path)]
              (update-component !db component-name component-spec nil))))
-       
+
        ::core/finl
        (fn web-components-plugin-finl
          []
@@ -1259,7 +1261,8 @@ from a set/coll of keywords.
          (when-let [render-id (get-in @!db [::state ::pending-render-id])]
            (js/cancelAnimationFrame render-id))
          ;; TODO: see if we can clean up the classes enough that they can be reused
-         )})))
+         )})
+    (dissoc opts :hot-reload? :disable-tags? :preproc-vnode :after-render :before-render)))
 
 (defn remove!
   [!db]

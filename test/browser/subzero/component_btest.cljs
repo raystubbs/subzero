@@ -4,8 +4,7 @@
    [subzero.plugins.component-registry
     :refer [reg-component]
     :as component-registry]
-   [subzero.plugins.web-components :as web-components]
-   [subzero.logger :as log]))
+   [subzero.plugins.web-components :as web-components]))
 
 (defn do-steps [zero-element & step-fns]
   (if (empty? step-fns)

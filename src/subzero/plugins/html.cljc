@@ -7,7 +7,6 @@ HTML rendering.
    [subzero.impl.util :refer [str-writer str-writer->str write] :as base]
    [subzero.plugins.component-registry :as component-registry]
    [subzero.core :as core]
-   [subzero.logger :as log]
    [subzero.impl.markup :as markup])
   #?(:clj
      (:import
@@ -178,14 +177,15 @@ Format markup as an HTML string.
 
 (defn install!
   [!db
-   & {:keys [render-listener render-binding preproc-vnode]}]
+   & {:keys [render-listener render-binding preproc-vnode] :as opts}]
   (core/install-plugin! !db ::state
     (fn html-plugin [_]
       {::render-listener render-listener
        ::render-binding render-binding
        ::preproc-vnode (if preproc-vnode
                          (comp preproc-vnode markup/preproc-vnode)
-                         markup/preproc-vnode)})))
+                         markup/preproc-vnode)})
+    (dissoc opts :render-listener :render-binding :preproc-vnode)))
 
 (defn remove!
   [!db]
