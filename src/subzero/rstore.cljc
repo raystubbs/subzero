@@ -241,9 +241,9 @@ change tracking patches.
                 cur-node
                 
                 (let [parent-path (-> cur-path pop pop)
-                      parent-node (cond-> (get-in watches parent-path)
-                                    (and (empty? (:watch-keys cur-node)) (empty? (:sub cur-node)))
-                                    (update :sub dissoc (-> cur-path peek)))]
+                      parent-node (as-> (get-in watches parent-path) $
+                                    (if (and (empty? (:watch-keys cur-node)) (empty? (:sub cur-node)))
+                                      (update $ :sub dissoc (-> cur-path peek))
+                                      (assoc-in $ [:sub (-> cur-path peek)] cur-node)))]
                   (recur parent-path parent-node))))))
         watches))))
-
