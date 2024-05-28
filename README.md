@@ -11,7 +11,7 @@ provided by Zero.
 (ns increment-counter
   (:require
    [subzero.core :as sz]
-   [subzero.plugins.component-reigstry :as reg]
+   [subzero.plugins.component-registry :as reg]
    [subzero.plugins.web-components :as wc]))
 
 (defn on-click
@@ -31,7 +31,7 @@ provided by Zero.
   (reg/install!)
   (wc/install! js/document js/customElements)))
 
-(sz/reg-component !db :incrementing-button
+(reg/reg-component !db :incrementing-button
   :view button-view
   :props #{:clicks})
 ```
