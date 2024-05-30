@@ -163,7 +163,7 @@ when the asset changes on disk.
   (let [!private-state (get-private-state stylesheet-object)
         aborter (js/AbortController.)]
     (when-let [old-aborter (::aborter @!private-state)]
-      (.abort old-aborter))
+      (.abort old-aborter ::overridden))
     
     (swap! !private-state assoc ::href (str url) ::aborter aborter)
     
@@ -171,7 +171,10 @@ when the asset changes on disk.
       (.then #(.text %))
       (.then (fn [css-text]
                (when (= (::href @!private-state) (.toString url))
-                 (.replace stylesheet-object css-text))))) 
+                 (.replace stylesheet-object css-text))))
+      (.catch (fn [cause]
+                (when-not (= ::overridden cause)
+                  (throw cause)))))
     nil))
 
 (defn- get-stylesheet-object
@@ -280,7 +283,7 @@ when the asset changes on disk.
 (defn- diff-props
   [old-props new-props]
   (let [all-keys (merge old-props new-props)
-        deep-keys [:#style :#on :#internals :#bind]]
+        deep-keys [:#style :#on :#on-host :#internals :#bind]]
     (as-> all-keys $
       (apply dissoc $ deep-keys)
       (keys $)
@@ -319,20 +322,18 @@ from a set/coll of keywords.
   (listen
     [k _!db target listener-fun]
     (let [!private-state (get-private-state target)
-          aborter (js/AbortController.)
-          event (name k)]
-      (when-let [old-listener-aborter ^js/AbortController (get-in @!private-state [::listener-aborters event])]
+          aborter (js/AbortController.)]
+      (when-let [old-listener-aborter ^js/AbortController (get-in @!private-state [::listener-aborters k])]
         (.abort old-listener-aborter))
-      (swap! !private-state assoc-in [::listener-aborters event] aborter)
+      (swap! !private-state assoc-in [::listener-aborters k] aborter)
       (.addEventListener target (name k) listener-fun #js{:signal (.-signal aborter)}))
     nil)
   (unlisten
     [k _!db target]
-    (let [!private-state (get-private-state target)
-          event (name k)]
-      (when-let [old-listener-aborter ^js/AbortController (get-in @!private-state [::listener-aborters event])]
+    (let [!private-state (get-private-state target)]
+      (when-let [old-listener-aborter ^js/AbortController (get-in @!private-state [::listener-aborters k])]
         (.abort old-listener-aborter))
-      (swap! !private-state util/dissoc-in [::listener-aborters event]))
+      (swap! !private-state util/dissoc-in [::listener-aborters k]))
     nil))
 
 (extend-protocol IListenValue
@@ -396,6 +397,15 @@ from a set/coll of keywords.
               (get-bind-watchable new-val !db))]
         (bind k !db element watchable)))))
 
+(defrecord HostListenKey [k]
+  IListenKey
+  (listen
+    [_ !db target listener-fun]
+    (listen k !db target listener-fun))
+  (unlisten
+    [_ !db target]
+    (unlisten k !db target)))
+
 (defn- patch-root-props!
   [!db ^js/ShadowRoot shadow-root ^js/ElementInternals internals props]
   (let [!private-state (get-private-state shadow-root)
@@ -420,6 +430,7 @@ from a set/coll of keywords.
             to-array)))
       
       (patch-listeners! !db shadow-root (diff :#on))
+      (patch-listeners! !db (.-host shadow-root) (update-keys (diff :#on-host) ->HostListenKey))
 
       ;; patch internals
       (doseq [[k [_ new-val]] (diff :#internals)]
@@ -495,7 +506,13 @@ from a set/coll of keywords.
   [!db ^js/Node node]
   (let [!private-state (get-private-state node)
         props (::props @!private-state)]
-    (when-not (instance? js/ShadowRoot node)
+    (cond
+      (instance? js/ShadowRoot node)
+      (doseq [[k listener] (:#on-host props)]
+        (when (some? listener)
+          (unlisten (->HostListenKey k) !db (.-host node))))
+
+      :else
       (doseq [[k watchable] (:#bind props)]
         (when (some? watchable)
           (unbind k !db node))))
@@ -1034,7 +1051,10 @@ from a set/coll of keywords.
                   (or
                     (not (contains? old-spec-props k))
                     (and (nil? (:state-factory new-spec-props)) (:state-factory old-spec-props)))
-                  (assoc m k (get (::props @!instance-state) k))))
+                  (assoc m k (get (::props @!instance-state) k))
+
+                  :else
+                  m))
               prop-vals
               prop-vals))))
       (init-props instance)
@@ -1097,16 +1117,6 @@ from a set/coll of keywords.
                       (when (nil? (.-activeElement shadow))
                         (swap! !instance-state assoc ::doms-on-focus-path #{})))
                     true)
-                  (.addEventListener instance "focus"
-                    (fn [^js/FocusEvent _event]
-                      (when (pos? (or (get-in @!instance-state [::lifecycle-event-listener-counts "focus"]) 0))
-                        (.dispatchEvent shadow (js/FocusEvent. "focus"))))
-                    true)
-                  (.addEventListener instance "blur"
-                    (fn [^js/FocusEvent _event]
-                      (when (pos? (or (get-in @!instance-state [::lifecycle-event-listener-counts "blur"]) 0))
-                        (.dispatchEvent shadow (js/FocusEvent. "blur"))))
-                    true)
 
                   (let [orig-add-event-listener (.bind (.-addEventListener shadow) shadow)
                         orig-remove-event-listener (.bind (.-removeEventListener shadow) shadow)]
@@ -1166,12 +1176,12 @@ from a set/coll of keywords.
                  :when (and (= "LINK" (.-nodeName node)) (= "stylesheet" (.-rel node)))
                  :let [created-link-url (absolute-url !db (.-href node))]
                  :when (local-url? !db created-link-url)]
-           
+
            (rstore/patch! !db
              {:path [::state ::href-overrides]
               :change [:assoc (.-pathname created-link-url) (str created-link-url)]})
-           
-           (doseq [^js/Node matching-link (get @path->css-link-elements (.-pathname created-link-url))] 
+
+           (doseq [^js/Node matching-link (get @path->css-link-elements (.-pathname created-link-url))]
              (update-link matching-link created-link-url))
            (doseq [[original-url-str stylesheet-object] (get-in @!db [::state ::css-stylesheet-objects])
                    :let [original-url (js/URL. original-url-str)]
