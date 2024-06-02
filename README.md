@@ -184,6 +184,11 @@ If truthy, SubZero will check the top-level document for stylesheet `<link>`
 elements, and import linked stylesheets into this component.  Note that this
 wraps the stylesheets with `CSSStyleSheet`, which ignores imports.
 
+### `:form-associated?`
+If truthy, the component produced will be form associated.  Allowing it to report
+a current form value, errors, etc via the special `:#internals` prop on `:root>`
+(see below).
+
 ## Markup
 SubZero uses a markup notation similar to that of
 [Hiccup](https://github.com/weavejester/hiccup).  This is the notation that
@@ -284,10 +289,15 @@ Some additional special props can also be set on this node:
 - `:#internals` - A map of fields to set on the component's
   [`ElementInternals`](https://developer.mozilla.org/en-US/docs/Web/API/ElementInternals).
 - `:#on-host` - Like `:#on`, but registers the listeners on the element itself,
-  rather than its ShadowRoot.
+  rather than its ShadowRoot.  Also supports special sugar keys:
+    - `:#states` - Sets `ElementInternals#states` from a collection of keywords
+    - `:#value` - Sets the form value (only for form associated components)
+    - `:#validity` - Should be a map of `{:message ? :anchor ? :report? ?}`.  Calls
+      `ElementInternals#setValidity` with the given message and anchor.  If `:report?`
+      is truthy, also calls `ElementInternals#reportValidity`.
 
 ## Performance Optimization
-Use `#:tag` in combination with laziness and function substitution to optimize
+Use `:#tag` in combination with laziness and function substitution to optimize
 rendering performance progressively as bottlenecks are found.  A node whose tag
 is the same across renders has the following performance advantages:
 - Its props don't need to be compared with the previous version, they're assumed
