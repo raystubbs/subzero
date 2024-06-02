@@ -1,3 +1,7 @@
+[![Clojars Project](https://img.shields.io/clojars/v/me.raystubbs/subzero.svg)](https://clojars.org/me.raystubbs/subzero)
+![Test Badge](https://github.com/raystubbs/subzero/actions/workflows/ci.yml/badge.svg)
+[![cljdoc badge](https://cljdoc.org/badge/me.raystubbs/subzero)](https://cljdoc.org/d/me.raystubbs/subzero)
+
 # SubZero
 Build [web components](https://www.webcomponents.org/introduction)
 in Clojure/Script (the easy way).
