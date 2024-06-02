@@ -20,4 +20,15 @@
   {:extra-paths ["test/cljc" "test/clj"]
    :extra-deps {io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
    :main-opts ["-m" "cognitect.test-runner"]
-   :exec-fn cognitect.test-runner.api/test}}}
+   :exec-fn cognitect.test-runner.api/test}}}   :exec-fn cognitect.test-runner.api/test}
+
+  :bench
+  {:extra-deps  {criterium/criterium {:mvn/version "0.4.6"}
+                 dev.onionpancakes/chassis {:mvn/version "1.0.365"}
+                 hiccup/hiccup  {:mvn/version "2.0.0-RC3"}
+                 com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.2.0"}
+                 selmer/selmer  {:mvn/version "1.12.59"}
+                 enlive/enlive  {:mvn/version "1.1.6"}}
+   :jvm-opts ["-Djdk.attach.allowAttachSelf"]
+   :extra-paths ["dev" "test" "resources" "bench"]
+   :exec-fn     bench/bench-all}}}
