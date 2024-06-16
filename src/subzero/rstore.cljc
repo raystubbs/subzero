@@ -9,7 +9,7 @@ change tracking patches.
      (:import
       [clojure.lang IMeta])))
 
-(declare ^:private calc-patch)
+(declare calc-patch)
 
 (defn- assoc-op
   [basis & {:as other-map}]
@@ -128,7 +128,7 @@ change tracking patches.
               (catch #?(:clj Exception :cljs :default) ex
                 (log/error "Error in rstore watcher" :ex ex)))))))))
 
-(defn- calc-patch
+(defn calc-patch
   [operators basis patch]
   (reduce
     (fn [[patching changed-paths] {:keys [path change fnil subpatch]}]
