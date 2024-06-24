@@ -738,9 +738,10 @@ from a set/coll of keywords.
   [!db ^js/HTMLElement host vnode]
   (let [shadow-root ^js/ShadowRoot (.-shadowRoot host)
         !host-state (get-private-state host)
+        !shadow-state (get-private-state shadow-root)
         !static-state (-> host .-constructor get-private-state)
         default-css (::default-css @!static-state)
-        old-props (::props @!host-state)
+        old-props (::props @!shadow-state)
         preproc-vnode (get-in @!db [::state ::preproc-vnode])
         [props body] (cond
                        (and (vector? vnode) (= (first vnode) :root>))
