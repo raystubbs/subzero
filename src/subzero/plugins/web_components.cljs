@@ -652,7 +652,8 @@ from a set/coll of keywords.
                               (vector? vnode)
                               (let [[tag props body] (preproc-vnode vnode)
                                     child-element (take-el-dom tag props)
-                                    old-props (::props @(get-private-state child-element))]
+                                    !child-element-state (get-private-state child-element)
+                                    old-props (::props @!child-element-state)]
                                 (when (or
                                         disable-tags?
                                         (nil? (:#tag props))
@@ -660,6 +661,8 @@ from a set/coll of keywords.
                                         (not= (:#tag props) (:#tag old-props)))
                                   (patch-props! !db child-element props)
                                   (when-not (:#opaque? props)
+                                    (when (::ignore-tags-on-next-patch? host-state)
+                                      (swap! !child-element-state assoc ::ignore-tags-on-next-patch? true))
                                     (patch-children! !db host child-element body)))
                                 [child-element])
 
