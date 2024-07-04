@@ -149,7 +149,7 @@ HTML rendering.
             (write-html !db w (render-binding node-id k v))))))
 
     :else
-    (write w (-> vnode str (str/replace #"[<>]" #(case % "<" "&gt;" ">" "&lt;"))))))
+    (write w (-> vnode str (str/replace #"[<>]" #(case % "<" "&lt;" ">" "&gt;"))))))
 
 (defn write-html "
 Write markup to a writer as HTML.
