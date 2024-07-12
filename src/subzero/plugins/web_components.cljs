@@ -180,7 +180,7 @@ when the asset changes on disk.
 (defn- get-stylesheet-object
   [!db x]
   (cond
-    (or (instance? js/URL x) (and (string? x) (str/starts-with? x "http")))
+    (or (instance? js/URL x) (and (string? x) (or (str/starts-with? x "/") (str/starts-with? x "http"))))
     (let [absolute-url (absolute-url !db x)
           absolute-url-str (.toString absolute-url)]
       (or

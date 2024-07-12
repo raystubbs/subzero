@@ -43,7 +43,7 @@ HTML rendering.
             (keep
               (fn [css-val]
                 (if
-                  (or (and (string? css-val) (str/starts-with? css-val "http"))
+                  (or (and (string? css-val) (or (str/starts-with? css-val "/") (str/starts-with? css-val "http")))
                     #?(:cljs (instance? js/URL css-val)
                        :clj (or (instance? URI css-val) (instance? URL css-val))))
                   [:link :rel "stylesheet" :href (str css-val)]
