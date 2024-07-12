@@ -357,7 +357,7 @@ from a set/coll of keywords.
       (when-let [old-watchable (get-in @!private-state [::bindings k])]
         (remove-watch old-watchable k))
       (swap! !private-state assoc-in [::bindings k] watchable)
-      (add-watch watchable k
+      (add-watch watchable [element k]
         (fn [_ _ old-val new-val]
           (when-not (identical? old-val new-val)
             (set-element-prop! !db element k new-val))))
@@ -369,7 +369,7 @@ from a set/coll of keywords.
     [k !db element]
     (let [!private-state (get-private-state element)]
       (when-let [old-watchable (get-in @!private-state [::bindings k])]
-        (remove-watch old-watchable k))
+        (remove-watch old-watchable [element k]))
       (set-element-prop! !db element k nil)
       (swap! !private-state util/dissoc-in [::bindings k]))))
 
