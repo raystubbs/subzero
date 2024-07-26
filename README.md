@@ -287,14 +287,14 @@ Some additional special props can also be set on this node:
   When rendering to HTML as a declarative shadow DOM, produces `<script>`
   elements instead.
 - `:#internals` - A map of fields to set on the component's
-  [`ElementInternals`](https://developer.mozilla.org/en-US/docs/Web/API/ElementInternals).
+  [`ElementInternals`](https://developer.mozilla.org/en-US/docs/Web/API/ElementInternals).  Also supports special sugar keys:
+  - `:#states` - Sets `ElementInternals#states` from a collection of keywords
+  - `:#value` - Sets the form value (only for form associated components)
+  - `:#validity` - Should be a map of `{:message ? :anchor ? :report? ?}`.  Calls
+    `ElementInternals#setValidity` with the given message and anchor.  If `:report?`
+    is truthy, also calls `ElementInternals#reportValidity`.
 - `:#on-host` - Like `:#on`, but registers the listeners on the element itself,
-  rather than its ShadowRoot.  Also supports special sugar keys:
-    - `:#states` - Sets `ElementInternals#states` from a collection of keywords
-    - `:#value` - Sets the form value (only for form associated components)
-    - `:#validity` - Should be a map of `{:message ? :anchor ? :report? ?}`.  Calls
-      `ElementInternals#setValidity` with the given message and anchor.  If `:report?`
-      is truthy, also calls `ElementInternals#reportValidity`.
+  rather than its ShadowRoot.
 
 ## Performance Optimization
 Use `:#tag` in combination with laziness and function substitution to optimize
