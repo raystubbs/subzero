@@ -28,16 +28,16 @@ State lives at `::state` in the db, and has:
   ;; Only populated when hot reload is enabled.
 "
   (:require
-   [subzero.rstore :as rstore]
-   [subzero.core :as core]
-   [subzero.impl.util :as util]
-   [subzero.impl.markup :as markup]
-   [subzero.logger :as log]
-   [subzero.plugins.component-registry :as component-registry]
-   [goog :refer [DEBUG]]
-   [goog.object :as obj]
-   [clojure.string :as str]
-   [clojure.set :as set]))
+    [subzero.rstore :as rstore]
+    [subzero.core :as core]
+    [subzero.impl.util :as util]
+    [subzero.impl.markup :as markup]
+    [subzero.logger :as log]
+    [subzero.plugins.component-registry :as component-registry]
+    [goog :refer [DEBUG]]
+    [goog.object :as obj]
+    [clojure.string :as str]
+    [clojure.set :as set]))
 
 (defn- compile-css
   [s]
@@ -138,7 +138,7 @@ when the asset changes on disk.
       (when (local-url? !db full-css-url)
         (let [top-level-css-link-doms
               (array-seq (.querySelectorAll document "link[rel=\"stylesheet\"]"))
-              
+
               existing-link-dom
               (some
                 (fn [^js/HTMLLinkElement link]
@@ -164,9 +164,9 @@ when the asset changes on disk.
         aborter (js/AbortController.)]
     (when-let [old-aborter (::aborter @!private-state)]
       (.abort old-aborter ::overridden))
-    
+
     (swap! !private-state assoc ::href (str url) ::aborter aborter)
-    
+
     (-> (js/fetch url #js{:signal (.-signal aborter)})
       (.then #(.text %))
       (.then (fn [css-text]
@@ -185,7 +185,7 @@ when the asset changes on disk.
           absolute-url-str (.toString absolute-url)]
       (or
         (get-in @!db [::state ::css-stylesheet-objects absolute-url-str])
-        
+
         (let [new-css-obj (compile-css "* { display: none; }")]
           (.replaceSync new-css-obj "* { display: none; }")
           (ensure-top-level-css-link !db absolute-url-str)
@@ -198,10 +198,10 @@ when the asset changes on disk.
             {:path [::state ::css-stylesheet-objects absolute-url-str]
              :change [:value new-css-obj]})
           new-css-obj)))
-    
+
     (string? x)
     (compile-css x)
-    
+
     (instance? js/CSSStyleSheet x)
     x))
 
@@ -212,7 +212,7 @@ when the asset changes on disk.
     (let [url (cond
                 (instance? js/URL value)
                 value
-                
+
                 (and (string? value) (str/starts-with? value "http"))
                 (try
                   (absolute-url !db value)
@@ -240,17 +240,17 @@ when the asset changes on disk.
   [!db ^js/HTMLElement element prop-name value]
   (when-not (set-prop! !db element prop-name value)
     (let [adjusted-value (adjusted-prop-value !db prop-name value)
-          component-name (or (.-componentName element) (-> element .-nodeName str/lower-case keyword)) 
+          component-name (or (.-componentName element) (-> element .-nodeName str/lower-case keyword))
           attr-name (name prop-name)
           attr-value ((component-registry/get-attribute-writer !db component-name)
                       adjusted-value attr-name component-name)]
       (cond
         (true? attr-value)
         (.setAttribute element attr-name "")
-        
+
         (not attr-value)
         (.removeAttribute element attr-name)
-        
+
         :else
         (.setAttribute element attr-name (str attr-value)))))
   nil)
@@ -428,7 +428,7 @@ from a set/coll of keywords.
           (->> (conj css-prop host-css)
             (mapv (partial get-stylesheet-object !db))
             to-array)))
-      
+
       (patch-listeners! !db shadow-root (diff :#on))
       (patch-listeners! !db (.-host shadow-root) (update-keys (diff :#on-host) ->HostListenKey))
 
@@ -525,7 +525,13 @@ from a set/coll of keywords.
     (when (some? (::status @!private-state))
       (let [shadow-root (.-shadowRoot node)
             !static-state (get-private-state (.-constructor node))]
-        (some-> @!private-state ::render-vdom-timeout js/clearTimeout)
+        (rstore/patch! !db
+          [{:path [::state ::elements-to-render]
+            :change [:clear node]}
+           {:path [::state ::elements-to-patch]
+            :change [:clear node]}
+           {:path [::state ::elements-to-disconnect]
+            :change [:clear node]}])
         (swap! !private-state assoc ::status :disconnected)
         (doseq [cleanup-fn (::cleanup-fns @!private-state)]
           (cleanup-fn))
@@ -681,11 +687,11 @@ from a set/coll of keywords.
                         vec)
 
         focused-doms (::doms-on-focus-path host-state)
-        
+
         index-of-focused-child-in-target
         (when (seq focused-doms)
           (util/index-of (partial contains? focused-doms) target-layout))
-        
+
         child-dom->source-index (set/map-invert source-layout)
         preserved-child-doms (set target-layout)]
 
@@ -709,7 +715,7 @@ from a set/coll of keywords.
         (count target-layout)
         child-dom->source-index
         target-layout)
-      
+
       :else
       (do
         (apply-layout-changes!
@@ -772,11 +778,11 @@ from a set/coll of keywords.
 
 (defn- expire-elements!
   [!db]
-  (doseq [element (get-in @!db [::state ::disconnect-elements])
+  (doseq [element (get-in @!db [::state ::elements-to-disconnect])
           :when (not (.-isConnected element))]
     (prepare-node-for-removal! !db element))
   (rstore/patch! !db
-    {:path [::state ::disconnect-elements]
+    {:path [::state ::elements-to-disconnect]
      :change [:value #{}]})
   nil)
 
@@ -791,12 +797,19 @@ from a set/coll of keywords.
           (log/error "Error in component view function"
             :data {:component (::name @!static-state)}
             :ex e)
-          nil)))
-    (js/clearTimeout (::render-vdom-timeout @!element-state))
-    (swap! !element-state assoc ::render-vdom-timeout nil))
+          nil))))
   nil)
 
-(defn- render-dirty-elements!
+(defn- render-vdoms-for-dirty-elements!
+  [!db]
+  (doseq [element (get-in @!db [::state ::elements-to-render])]
+    (render-vdom! element))
+  (rstore/patch! !db
+    {:path [::state ::elements-to-render]
+     :change [:value #{}]})
+  nil)
+
+(defn- update-dirty-elements!
   [!db]
   (when-let [before-render (get-in @!db [::state ::before-render])]
     (try
@@ -806,20 +819,23 @@ from a set/coll of keywords.
   (rstore/patch! !db
     {:path [::state ::pending-render-id]
      :change [:value nil]})
-  
-  (while (seq (get-in @!db [::state ::dirty-elements]))
-    (let [dirty-elements (get-in @!db [::state ::dirty-elements])]
+
+  (while (seq (get-in @!db [::state ::elements-to-patch]))
+    (let [elements-to-patch (get-in @!db [::state ::elements-to-patch])
+          elements-to-render (get-in @!db [::state ::elements-to-render])]
       (rstore/patch! !db
-        {:path [::state ::dirty-elements]
-         :change [:value #{}]})
-      (doseq [^js/HTMLElement element (sort-by #(obj/get % render-order-sym) dirty-elements)
+        [{:path [::state ::elements-to-patch]
+          :change [:value #{}]}
+         {:path [::state ::elements-to-render]
+          :change [:value #{}]}])
+      (doseq [^js/HTMLElement element (sort-by #(obj/get % render-order-sym) elements-to-patch)
               :let [!element-state (get-private-state element)]
               :when (not= (::status @!element-state) :disconnected)]
-        (let [!static-state (-> element .-constructor get-private-state) 
+        (let [!static-state (-> element .-constructor get-private-state)
               ^js/ShadowDom shadow (::shadow @!element-state)
               vdom-props (::props @!element-state)
               vdom (do
-                     (when (::render-vdom-timeout @!element-state)
+                     (when (contains? elements-to-render element)
                        (render-vdom! element))
                      (::rendered-vdom @!element-state))]
 
@@ -830,13 +846,13 @@ from a set/coll of keywords.
                   (< (.-tabIndex element) 0))
             (set! (.-tabIndex element) 0))
 
-          
+
           (try
             ;; render the thing to DOM
             (patch-root! !db element vdom)
             (swap! !element-state assoc ::ignore-tags-on-next-patch? false)
-            
-            
+
+
             ;; dispatch lifecycle events
             (let [event-type
                   (if (= :connected (::status @!element-state))
@@ -844,7 +860,7 @@ from a set/coll of keywords.
                     (do
                       (swap! !element-state assoc ::status :connected)
                       "connect"))
-                  
+
                   observed-events
                   (->> (get @!element-state ::lifecycle-event-listener-counts)
                     (keep #(when (pos? (val %)) (key %)))
@@ -856,7 +872,7 @@ from a set/coll of keywords.
                       (.dispatchEvent shadow (js/Event. event-type)))
                     (when (contains? observed-events "render")
                       (.dispatchEvent shadow (js/Event. "render")))))))
-            
+
             (catch :default ex
               (log/error "Error rendering component"
                 :data {:component (::name @!static-state)}
@@ -872,21 +888,20 @@ from a set/coll of keywords.
   nil)
 
 (defn- invalidate!
-  [!db ^js/HTMLElement element ignore-tags?] 
+  [!db ^js/HTMLElement element ignore-tags?]
   (let [!element-state (get-private-state element)]
     (when (not= :disconnected (::status @!element-state))
       (rstore/patch! !db
-        {:path [::state ::dirty-elements]
-         :change [:conj element]})
+        [{:path [::state ::elements-to-patch]
+          :change [:conj element]}
+         {:path [::state ::elements-to-render]
+          :change [:conj element]}])
       (when ignore-tags?
         (swap! !element-state assoc ::ignore-tags-on-next-patch? true))
-      (when-not (::render-vdom-timeout @!element-state)
-        (swap! !element-state assoc ::render-vdom-timeout
-          (js/setTimeout render-vdom! 7 element)))
       (when-not (get-in @!db [::state ::pending-render-id])
         (rstore/patch! !db
           {:path [::state ::pending-render-id]
-           :change [:value (js/requestAnimationFrame (partial render-dirty-elements! !db))]})))))
+           :change [:value (js/requestAnimationFrame (partial update-dirty-elements! !db))]})))))
 
 (defn- update-element-class
   [!db class component-name
@@ -902,7 +917,7 @@ from a set/coll of keywords.
                               (when (and (:attr prop-spec) (nil? (:state-factory prop-spec)))
                                 [(:attr prop-spec) prop-spec])))
                           (into {}))
-        init-props (fn [^js/Node instance]
+        init-props! (fn [^js/Node instance]
                      (let [!instance-state (get-private-state instance)
                            attr-reader (component-registry/get-attribute-reader !db component-name)]
                        (doseq [prop-spec (vals props)
@@ -923,7 +938,7 @@ from a set/coll of keywords.
                                            :component component-name})))
                                (add-watch state watch-key
                                  (fn [_ _ _ new-val]
-                                   (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)] new-val) 
+                                   (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)] new-val)
                                    (invalidate! !db instance false)))
                                (when (satisfies? IDeref state)
                                  (swap! !instance-state update ::prop-vals assoc (:prop prop-spec) @state))
@@ -951,10 +966,10 @@ from a set/coll of keywords.
     ;; If this component's fields have been indexed,
     ;; remove it from the index since its fields may have changed
     (purge-fields-index-for-class !db class)
-    
+
     ;; Delete properties on the prototype.
     (doseq [property-name (::removable-properties @!static-state)]
-      (js-delete proto property-name)) 
+      (js-delete proto property-name))
     (swap! !static-state assoc ::removable-properties #{})
 
     (js/Object.defineProperties
@@ -975,14 +990,14 @@ from a set/coll of keywords.
                   (when (= :disconnected (::status @(get-private-state this)))
                     (swap! !static-state update ::instances conj this)
                     (swap! (get-private-state this) assoc ::status :connecting)
-                    (init-props this)
+                    (init-props! this)
                     (invalidate! !db this false))))
               :configurable true}
           :disconnectedCallback
           #js{:value
               (fn []
                 (rstore/patch! !db
-                  {:path [::state ::disconnect-elements]
+                  {:path [::state ::elements-to-disconnect]
                    :change [:conj (js* "this")]}))
               :configurable true}
 
@@ -1032,12 +1047,12 @@ from a set/coll of keywords.
 
     (doseq [[property-name {:keys [get set value writable?]}] extra-properties]
       (swap! !static-state update ::removable-properties conj (name property-name))
-      
+
       (js/Object.defineProperty
         proto
         (name property-name)
         #js{:get get :set set :value value :writable writable?}))
-    
+
     (doseq [instance (::instances @!static-state)
             :let [!instance-state (get-private-state instance)]]
       (swap! !instance-state update ::prop-vals
@@ -1051,7 +1066,7 @@ from a set/coll of keywords.
                     (not (contains? new-spec-props k))
                     (and (:state-factory new-spec-props) (nil? (:state-factory old-spec-props))))
                   (dissoc m k)
-                  
+
                   (or
                     (not (contains? old-spec-props k))
                     (and (nil? (:state-factory new-spec-props)) (:state-factory old-spec-props)))
@@ -1061,7 +1076,7 @@ from a set/coll of keywords.
                   m))
               prop-vals
               prop-vals))))
-      (init-props instance)
+      (init-props! instance)
       (invalidate! !db instance true))))
 
 
@@ -1082,21 +1097,21 @@ from a set/coll of keywords.
                                 }
                             })")
             !static-state (get-private-state new-class)]
-        
+
         (swap! !static-state assoc ::instances #{})
-        
+
         (js/Object.defineProperty (.-prototype new-class) "init"
           #js{:value
               (fn []
-                (let [instance ^js/HTMLElement (js* "this") 
+                (let [instance ^js/HTMLElement (js* "this")
                       !instance-state (get-private-state instance)
-                      
+
                       shadow ^js/ShadowRoot
-                      (or (.-shadowRoot instance)
-                        (.attachShadow instance
-                          #js{:mode "open"
-                              :delegatesFocus (= focus :delegate)}))]
-                  
+                             (or (.-shadowRoot instance)
+                               (.attachShadow instance
+                                 #js{:mode "open"
+                                     :delegatesFocus (= focus :delegate)}))]
+
                   (reset! !instance-state
                     {::shadow shadow
                      ::internals (.attachInternals instance)
@@ -1105,11 +1120,10 @@ from a set/coll of keywords.
                      ::doms-on-focus-path #{}
                      ::status :disconnected
                      ::ignore-tags-on-next-patch? false
-                     ::render-vdom-timeout nil
                      ::rendered-vdom nil})
-                  
+
                   (obj/set instance render-order-sym (swap! !render-order-seq inc))
-                  
+
                   (.addEventListener shadow "focusin"
                     (fn [^js/FocusEvent event]
                       (let [event-path (.composedPath event)
@@ -1196,11 +1210,11 @@ from a set/coll of keywords.
     (let [observer (js/MutationObserver. observer-cb)
           document (get-in @!db [::state ::document])
           opts #js{:childList true}]
-      
+
       (rstore/patch! !db
         {:path [::state ::hot-reload-observer]
          :change [:value observer]})
-      
+
       (.observe observer (.-head document) opts)
       (.observe observer (.-body document) opts))))
 
@@ -1227,16 +1241,18 @@ from a set/coll of keywords.
        ::css-link-elements #{}
        ::css-stylesheet-objects {}
        ::href-overrides {}
-       ::dirty-elements #{}
-       ::disconnect-elements #{}
+       ::elements-to-patch #{}
+       ::elements-to-render #{}
+       ::elements-to-disconnect #{}
        ::pending-render-id nil
+       ::vdom-render-interval-id nil
        ::render-order-seq 0
        ::preproc-vnode (if preproc-vnode
                          (comp preproc-vnode markup/preproc-vnode)
                          markup/preproc-vnode)
        ::after-render after-render
        ::before-render before-render
-       
+
        ::core/init
        (fn web-components-plugin-init
          []
@@ -1264,7 +1280,12 @@ from a set/coll of keywords.
 
            ;; handle existing component registrations
            (doseq [[component-name component-spec] (get-in @!db components-path)]
-             (update-component !db component-name component-spec nil))))
+             (update-component !db component-name component-spec nil)))
+
+         ;; setup vdom render interval
+         (rstore/patch! !db
+           {:path [::state ::vdom-render-interval-id]
+            :change [:value (js/setInterval render-vdoms-for-dirty-elements! 7 !db)]}))
 
        ::core/finl
        (fn web-components-plugin-finl
@@ -1274,6 +1295,7 @@ from a set/coll of keywords.
            (stop-hot-reload-observer! !db))
          (when-let [render-id (get-in @!db [::state ::pending-render-id])]
            (js/cancelAnimationFrame render-id))
+         (js/clearInterval (get-in @!db [::state ::vdom-render-interval-id]))
          ;; TODO: see if we can clean up the classes enough that they can be reused
          )})
     (dissoc opts :hot-reload? :disable-tags? :preproc-vnode :after-render :before-render)))
