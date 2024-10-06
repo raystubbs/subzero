@@ -27,17 +27,17 @@ State lives at `::state` in the db, and has:
   ;;
   ;; Only populated when hot reload is enabled.
 "
-  (:require
-    [subzero.rstore :as rstore]
-    [subzero.core :as core]
-    [subzero.impl.util :as util]
-    [subzero.impl.markup :as markup]
-    [subzero.logger :as log]
-    [subzero.plugins.component-registry :as component-registry]
-    [goog :refer [DEBUG]]
-    [goog.object :as obj]
-    [clojure.string :as str]
-    [clojure.set :as set]))
+    (:require
+     [subzero.rstore :as rstore]
+     [subzero.core :as core]
+     [subzero.impl.util :as util]
+     [subzero.impl.markup :as markup]
+     [subzero.logger :as log]
+     [subzero.plugins.component-registry :as component-registry]
+     [goog :refer [DEBUG]]
+     [goog.object :as obj]
+     [clojure.string :as str]
+     [clojure.set :as set]))
 
 (defn- compile-css
   [s]
@@ -49,6 +49,8 @@ State lives at `::state` in the db, and has:
 (defonce ^:private svg-ns "http://www.w3.org/2000/svg")
 (defonce ^:private default-stylesheet (compile-css ":host { display: contents; }"))
 (defonce ^:private js-undefined (js* "undefined"))
+
+(declare invalidate! schedule-animation-frame!)
 
 (defn- get-private-state [^js/Object obj]
   (or (obj/get obj private-state-sym)
@@ -144,9 +146,9 @@ when the asset changes on disk.
                 (fn [^js/HTMLLinkElement link]
                   (let [link-url (absolute-url !db (.-href link))]
                     (when
-                      (and
-                        (= (.-origin full-css-url) (.-origin link-url))
-                        (= (.-pathname full-css-url) (.-pathname link-url)))
+                     (and
+                       (= (.-origin full-css-url) (.-origin link-url))
+                       (= (.-pathname full-css-url) (.-pathname link-url)))
                       link)))
                 top-level-css-link-doms)]
           (or existing-link-dom
@@ -373,17 +375,25 @@ from a set/coll of keywords.
       (set-element-prop! !db element k nil)
       (swap! !private-state util/dissoc-in [::bindings k]))))
 
+(defn- listener-fn
+  [!db x]
+  (if (and (ifn? x) (not (satisfies? IListenValue x)))
+    x
+    (get-listener-fun x !db)))
+
 (defn- patch-listeners!
   [!db ^js/EventTarget target listener-diff-map]
   (doseq [[k [old-val new-val]] listener-diff-map]
     (when (some? old-val)
       (unlisten k !db target))
     (when (some? new-val)
-      (let [listener-fun
-            (if (and (ifn? new-val) (not (satisfies? IListenValue new-val)))
-              new-val
-              (get-listener-fun new-val !db))]
-        (listen k !db target listener-fun)))))
+      (listen k !db target (listener-fn !db new-val)))))
+
+(defn- binding-watchable
+  [!db x]
+  (if (and (util/can-watch? x) (not (satisfies? IBindValue x)))
+    x
+    (get-bind-watchable x !db)))
 
 (defn- patch-bindings!
   [!db ^js/HTMLElement element binds-diff-map]
@@ -391,11 +401,7 @@ from a set/coll of keywords.
     (when (some? old-val)
       (unbind k !db element))
     (when (some? new-val)
-      (let [watchable
-            (if (and (util/can-watch? new-val) (not (satisfies? IBindValue new-val)))
-              new-val
-              (get-bind-watchable new-val !db))]
-        (bind k !db element watchable)))))
+      (bind k !db element (binding-watchable !db new-val)))))
 
 (defrecord HostListenKey [k]
   IListenKey
@@ -468,38 +474,75 @@ from a set/coll of keywords.
 (defn- patch-props!
   [!db ^js/HTMLElement element props]
   (let [!private-state (get-private-state element)
-        diff (diff-props (::props @!private-state) props)]
-    (when-not (empty? diff)
-      ;; normal props
-      (doseq [[k [_old-val new-val]] (filter #(normal-prop-name? (key %)) diff)]
-        (set-element-prop! !db element k new-val))
+        old-props (::props @!private-state)]
+    (cond
+      (seq old-props)
+      (let [diff (diff-props (dissoc (::props @!private-state) :#initial :#final) props)]
+        (when-not (empty? diff)
+          ;; normal props
+          (doseq [[k [_old-val new-val]] (filter #(normal-prop-name? (key %)) diff)]
+            (set-element-prop! !db element k new-val))
 
-      (patch-listeners! !db element (diff :#on))
-      (patch-bindings! !db element (diff :#bind))
+          (patch-listeners! !db element (diff :#on))
+          (patch-bindings! !db element (diff :#bind))
 
-      ;; patch styles
-      (when-let [style-diff (diff :#style)]
-        (let [style-obj (.-style element)]
-          (doseq [[k [_ new-val]] style-diff]
-            (if-not new-val
-              (.removeProperty style-obj (name k))
-              (.setProperty style-obj (name k) (markup/clj->css-property new-val))))))
+          ;; patch styles
+          (when-let [style-diff (diff :#style)]
+            (let [style-obj (.-style element)]
+              (doseq [[k [_ new-val]] style-diff]
+                (if-not new-val
+                  (.removeProperty style-obj (name k))
+                  (.setProperty style-obj (name k) (markup/clj->css-property new-val))))))
 
-      ;; patch classes
-      (when-let [[_ class] (diff :#class)]
-        ;; setting className is faster than .setAttribute, but there
-        ;; doesn't seem to be a way to remove the attribute this way,
-        ;; so use .removeAttribute to remove it
-        (cond
-          (nil? class)
-          (.removeAttribute element "class")
+           ;; patch classes
+          (when-let [[_ class] (diff :#class)]
+            ;; setting className is faster than .setAttribute, but there
+            ;; doesn't seem to be a way to remove the attribute this way,
+            ;; so use .removeAttribute to remove it
+            (cond
+              (nil? class)
+              (.removeAttribute element "class")
 
-          (coll? class)
-          (set! (.-className element) (str/join " " class))
+              (coll? class)
+              (set! (.-className element) (str/join " " class))
 
-          :else
-          (set! (.-className element) (str class))))
-      (swap! !private-state assoc ::props props)))
+              :else
+              (set! (.-className element) (str class))))
+
+          (swap! !private-state assoc ::props props)))
+
+      :else
+      (let [initializing? (::initializing? @!private-state)
+            class (or (when initializing? (some-> props :#initial :class)) (:#class props))
+            style (merge (:#style props) (when initializing? (some-> props :#initial :style)))]
+        ;; normal props
+        (doseq [[k v] (filter #(normal-prop-name? (key %)) props)]
+          (set-element-prop! !db element k v))
+
+        ;; listeners
+        (doseq [[k v] (:#on props)]
+          (listen k !db element (listener-fn !db v)))
+
+        ;; bindings
+        (doseq [[k v] (:#bind props)]
+          (bind k !db element (binding-watchable !db v)))
+
+        ;; patch styles
+        (when (seq style)
+          (let [style-obj (.-style element)]
+            (doseq [[k v] style]
+              (.setProperty style-obj (name k) (markup/clj->css-property v)))))
+
+         ;; patch classes
+        (when (seq class)
+          (cond
+            (coll? class)
+            (set! (.-className element) (str/join " " class))
+
+            :else
+            (set! (.-className element) (str class))))
+
+        (swap! !private-state assoc ::props (assoc props :#style style :#class class)))))
   nil)
 
 (defn- prepare-node-for-removal!
@@ -613,12 +656,44 @@ from a set/coll of keywords.
             (insert-child! element boundary-dom next-child-dom)
             (recur next-target-index (inc next-target-index))))))))
 
+(defn- parse-duration-str
+  [s]
+  (if-some [[_ n u] (re-matches #"([0-9.]+)(s|ms)" s)]
+    (case u "s" (* (parse-double n) 1000) "ms" (parse-long n))
+    0))
+
+(defn- get-element-animation-delay
+  [^js element]
+  (let [computed-style (js/getComputedStyle element)]
+    (reduce
+      (fn [current-max [next-duration-str next-delay-str]]
+        (max current-max (+ (parse-duration-str next-delay-str))(parse-duration-str next-duration-str)))
+      0
+      (concat
+        (map vector
+          (str/split (.getPropertyValue computed-style "transition-duration") #"\s*,\s*")
+          (str/split (.getPropertyValue computed-style "transition-delay") #"\s*,\s*"))
+        (map vector
+          (str/split (.getPropertyValue computed-style "animation-duration") #"\s*,\s*")
+          (str/split (.getPropertyValue computed-style "animation-delay") #"\s*,\s*"))))))
+
 (defn- patch-children!
   [!db ^js/HTMLElement host ^js/Node node children]
   (let [document ^js/HTMLDocument (get-in @!db [::state ::document])
         host-state @(get-private-state host)
         disable-tags? (get-in @!db [::state ::disable-tags?])
-        source-layout (-> node .-childNodes array-seq vec)
+        source-layout (->> node .-childNodes array-seq
+                        (keep
+                          (fn [^js child-dom]
+                            (let [!state (get-private-state child-dom)]
+                              (if (not (::finalizing? @!state))
+                                child-dom
+                                (do
+                                  (swap! !state assoc ::finalizing? false)
+                                  (.removeChild node child-dom)
+                                  (prepare-node-for-removal! !db child-dom)
+                                  nil)))))
+                        vec)
         preproc-vnode (get-in @!db [::state ::preproc-vnode])
         !child-doms (atom
                       (group-by
@@ -664,12 +739,25 @@ from a set/coll of keywords.
                                         disable-tags?
                                         (nil? (:#tag props))
                                         (::ignore-tags-on-next-patch? host-state)
-                                        (not= (:#tag props) (:#tag old-props)))
+                                        (not= (:#tag props) (:#tag old-props))
+                                        (not (true? (::initializing? @!child-element-state))))
+                                  (when (nil? (::initializing? @!child-element-state))
+                                    (swap! !child-element-state assoc ::initializing? (boolean (:#initial props))))
+
                                   (patch-props! !db child-element props)
                                   (when-not (:#opaque? props)
                                     (when (::ignore-tags-on-next-patch? host-state)
                                       (swap! !child-element-state assoc ::ignore-tags-on-next-patch? true))
-                                    (patch-children! !db host child-element body)))
+                                    (patch-children! !db host child-element body))
+
+                                  (when (::initializing? @!child-element-state)
+                                    (js/setTimeout
+                                      (fn []
+                                        (swap! !child-element-state assoc ::initializing? false)
+                                        (rstore/patch! !db
+                                          {:path [::state ::elements-to-patch]
+                                           :change [:conj host]})
+                                        (schedule-animation-frame! !db)))))
                                 [child-element])
 
                               (fn? vnode)
@@ -733,14 +821,51 @@ from a set/coll of keywords.
 
     ;; remove expired children
     (doseq [child-node source-layout
-            :when (not (contains? preserved-child-doms child-node))]
+            :when (not (contains? preserved-child-doms child-node))
+            :let [!child-state (get-private-state child-node)
+                  child-props  (::props @!child-state)]]
       ;; if we need to remove a focused child, then first try to move focus to a focusable
       ;; parent; otherwise the browser will default to focusing the <body>... which can case
       ;; problems in many cases
       (when (contains? focused-doms child-node)
         (try-pass-focus! !db (.-parentNode child-node)))
-      (.removeChild node child-node)
-      (prepare-node-for-removal! !db child-node))))
+
+      (cond
+        (:#final child-props)
+        (let [final-props (:#final child-props)
+              final-style (:style final-props)
+              final-class (:class final-props)]
+          (swap! !child-state assoc ::finalizing? true)
+
+          (when (seq final-style)
+            (let [style-obj (.-style child-node)]
+              (doseq [[k v] final-style]
+                (.setProperty style-obj (name k) (markup/clj->css-property v)))))
+
+          (when (seq final-class)
+            (cond
+              (coll? final-class)
+              (set! (.-className child-node) (str/join " " final-class))
+
+              :else
+              (set! (.-className child-node) (str final-class))))
+
+          (let [total-animation-delay (- (get-element-animation-delay child-node) 50)]
+            (if-not (pos? total-animation-delay)
+              (do
+                (.removeChild node child-node)
+                (prepare-node-for-removal! !db child-node))
+              (js/setTimeout
+                (fn []
+                  (when (::finalizing? @!child-state)
+                    (.removeChild node child-node)
+                    (prepare-node-for-removal! !db child-node)))
+                total-animation-delay))))
+
+        :else
+        (do
+          (.removeChild node child-node)
+          (prepare-node-for-removal! !db child-node))))))
 
 
 (defn- patch-root!
@@ -887,6 +1012,13 @@ from a set/coll of keywords.
             (log/error "Error in after-render callback" :ex ex))))))
   nil)
 
+(defn- schedule-animation-frame!
+  [!db]
+  (when-not (get-in @!db [::state ::pending-render-id])
+    (rstore/patch! !db
+      {:path [::state ::pending-render-id]
+       :change [:value (js/requestAnimationFrame (partial update-dirty-elements! !db))]})))
+
 (defn- invalidate!
   [!db ^js/HTMLElement element ignore-tags?]
   (let [!element-state (get-private-state element)]
@@ -898,10 +1030,8 @@ from a set/coll of keywords.
           :change [:conj element]}])
       (when ignore-tags?
         (swap! !element-state assoc ::ignore-tags-on-next-patch? true))
-      (when-not (get-in @!db [::state ::pending-render-id])
-        (rstore/patch! !db
-          {:path [::state ::pending-render-id]
-           :change [:value (js/requestAnimationFrame (partial update-dirty-elements! !db))]})))))
+      (schedule-animation-frame! !db))))
+
 
 (defn- update-element-class
   [!db class component-name
@@ -918,38 +1048,38 @@ from a set/coll of keywords.
                                 [(:attr prop-spec) prop-spec])))
                           (into {}))
         init-props! (fn [^js/Node instance]
-                     (let [!instance-state (get-private-state instance)
-                           attr-reader (component-registry/get-attribute-reader !db component-name)]
-                       (doseq [prop-spec (vals props)
-                               :when (not (contains? (::prop-vals @!instance-state) (:prop prop-spec)))]
-                         (cond
-                           (:state-factory prop-spec)
-                           (try
-                             (let [state ((:state-factory prop-spec) instance)
-                                   watch-key [::state-prop (:prop prop-spec) instance]
-                                   cleanup-fn (fn []
-                                                (swap! !instance-state update ::prop-vals dissoc (:prop prop-spec))
-                                                (remove-watch state watch-key)
-                                                (when-let [state-cleanup (:state-cleanup prop-spec)]
-                                                  (state-cleanup state instance)))]
-                               (when-not (util/can-watch? state)
-                                 (throw (ex-info "State factory produced something not watchable"
-                                          {:state state
-                                           :component component-name})))
-                               (add-watch state watch-key
-                                 (fn [_ _ _ new-val]
-                                   (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)] new-val)
-                                   (invalidate! !db instance false)))
-                               (when (satisfies? IDeref state)
-                                 (swap! !instance-state update ::prop-vals assoc (:prop prop-spec) @state))
-                               (swap! !instance-state update ::cleanup-fns (fnil conj #{}) cleanup-fn))
-                             (catch :default e
-                               (log/error "Error initializing state prop" :ex e)))
+                      (let [!instance-state (get-private-state instance)
+                            attr-reader (component-registry/get-attribute-reader !db component-name)]
+                        (doseq [prop-spec (vals props)
+                                :when (not (contains? (::prop-vals @!instance-state) (:prop prop-spec)))]
+                          (cond
+                            (:state-factory prop-spec)
+                            (try
+                              (let [state ((:state-factory prop-spec) instance)
+                                    watch-key [::state-prop (:prop prop-spec) instance]
+                                    cleanup-fn (fn []
+                                                 (swap! !instance-state update ::prop-vals dissoc (:prop prop-spec))
+                                                 (remove-watch state watch-key)
+                                                 (when-let [state-cleanup (:state-cleanup prop-spec)]
+                                                   (state-cleanup state instance)))]
+                                (when-not (util/can-watch? state)
+                                  (throw (ex-info "State factory produced something not watchable"
+                                           {:state state
+                                            :component component-name})))
+                                (add-watch state watch-key
+                                  (fn [_ _ _ new-val]
+                                    (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)] new-val)
+                                    (invalidate! !db instance false)))
+                                (when (satisfies? IDeref state)
+                                  (swap! !instance-state update ::prop-vals assoc (:prop prop-spec) @state))
+                                (swap! !instance-state update ::cleanup-fns (fnil conj #{}) cleanup-fn))
+                              (catch :default e
+                                (log/error "Error initializing state prop" :ex e)))
 
-                           (and (:attr prop-spec) (-> @!instance-state ::prop-vals (contains? (:prop prop-spec)) not))
-                           (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)]
-                             (some-> (.getAttribute instance (:attr prop-spec))
-                               (attr-reader (:attr prop-spec) component-name)))))))
+                            (and (:attr prop-spec) (-> @!instance-state ::prop-vals (contains? (:prop prop-spec)) not))
+                            (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)]
+                              (some-> (.getAttribute instance (:attr prop-spec))
+                                (attr-reader (:attr prop-spec) component-name)))))))
         default-css (cond-> [default-stylesheet]
                       inherit-doc-css?
                       (into (->> (.querySelectorAll document "link[rel=\"stylesheet\"]")
@@ -1107,10 +1237,10 @@ from a set/coll of keywords.
                       !instance-state (get-private-state instance)
 
                       shadow ^js/ShadowRoot
-                             (or (.-shadowRoot instance)
-                               (.attachShadow instance
-                                 #js{:mode "open"
-                                     :delegatesFocus (= focus :delegate)}))]
+                      (or (.-shadowRoot instance)
+                        (.attachShadow instance
+                          #js{:mode "open"
+                              :delegatesFocus (= focus :delegate)}))]
 
                   (reset! !instance-state
                     {::shadow shadow
@@ -1168,45 +1298,45 @@ from a set/coll of keywords.
 (defn- start-hot-reload-observer!
   [!db]
   (letfn
-    [(update-link [^js/Node original url]
-       (let [^js/Node clone (.cloneNode original)
-             !clone-state (get-private-state clone)]
-         (set! (.-href clone) url)
-         (reset! !clone-state @(get-private-state original))
-         (.insertAdjacentElement original "beforebegin" clone)
-         (.addEventListener clone "load"
-           (fn [_]
-             (js/setTimeout #(.remove original) 60))
-           #js{:once true})
-         (rstore/patch! !db
-           [{:path [::css-link-elements]
-             :change [:conj clone]}
-            {:path [::css-link-elements]
-             :change [:clear original]}])))
-     (observer-cb [^js/Array records]
-       (let [path->css-link-elements
-             (delay
-               (group-by
-                 (fn [^js/Node x]
-                   (-> x .-href (absolute-url !db) .-pathname))
-                 (get-in @!db [::state ::css-link-elements])))]
-         (doseq [^js record records, ^js/Node node (-> record .-addedNodes array-seq)
-                 :when (and (= "LINK" (.-nodeName node)) (= "stylesheet" (.-rel node)))
-                 :let [created-link-url (absolute-url !db (.-href node))]
-                 :when (local-url? !db created-link-url)]
+   [(update-link [^js/Node original url]
+      (let [^js/Node clone (.cloneNode original)
+            !clone-state (get-private-state clone)]
+        (set! (.-href clone) url)
+        (reset! !clone-state @(get-private-state original))
+        (.insertAdjacentElement original "beforebegin" clone)
+        (.addEventListener clone "load"
+          (fn [_]
+            (js/setTimeout #(.remove original) 60))
+          #js{:once true})
+        (rstore/patch! !db
+          [{:path [::css-link-elements]
+            :change [:conj clone]}
+           {:path [::css-link-elements]
+            :change [:clear original]}])))
+    (observer-cb [^js/Array records]
+      (let [path->css-link-elements
+            (delay
+              (group-by
+                (fn [^js/Node x]
+                  (-> x .-href (absolute-url !db) .-pathname))
+                (get-in @!db [::state ::css-link-elements])))]
+        (doseq [^js record records, ^js/Node node (-> record .-addedNodes array-seq)
+                :when (and (= "LINK" (.-nodeName node)) (= "stylesheet" (.-rel node)))
+                :let [created-link-url (absolute-url !db (.-href node))]
+                :when (local-url? !db created-link-url)]
 
-           (rstore/patch! !db
-             {:path [::state ::href-overrides]
-              :change [:assoc (.-pathname created-link-url) (str created-link-url)]})
+          (rstore/patch! !db
+            {:path [::state ::href-overrides]
+             :change [:assoc (.-pathname created-link-url) (str created-link-url)]})
 
-           (doseq [^js/Node matching-link (get @path->css-link-elements (.-pathname created-link-url))]
-             (update-link matching-link created-link-url))
-           (doseq [[original-url-str stylesheet-object] (get-in @!db [::state ::css-stylesheet-objects])
-                   :let [original-url (js/URL. original-url-str)]
-                   :when (and
-                           (local-url? !db original-url)
-                           (= (.-pathname original-url) (.-pathname created-link-url)))]
-             (load-stylesheet-contents! stylesheet-object created-link-url)))))]
+          (doseq [^js/Node matching-link (get @path->css-link-elements (.-pathname created-link-url))]
+            (update-link matching-link created-link-url))
+          (doseq [[original-url-str stylesheet-object] (get-in @!db [::state ::css-stylesheet-objects])
+                  :let [original-url (js/URL. original-url-str)]
+                  :when (and
+                          (local-url? !db original-url)
+                          (= (.-pathname original-url) (.-pathname created-link-url)))]
+            (load-stylesheet-contents! stylesheet-object created-link-url)))))]
     (let [observer (js/MutationObserver. observer-cb)
           document (get-in @!db [::state ::document])
           opts #js{:childList true}]
