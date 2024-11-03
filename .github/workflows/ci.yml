@@ -53,7 +53,7 @@ jobs:
           restore-keys: deps-
       - name: Install Yarn dependencies
         run: yarn
-      - name: Run browser tests
+      - name: Run ClojureScript tests
         run: yarn test
       - name: Run Clojure tests
         run: clojure -A:dev -X test/run
