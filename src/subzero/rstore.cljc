@@ -3,11 +3,12 @@ A simple data store suitable for reactive applications.
 It's just an atom that tracks some extra stuff to enable
 change tracking patches.
 "
-  (:require
-   [subzero.logger :as log])
-  #?(:clj
-     (:import
-      [clojure.lang IMeta])))
+    (:require
+     [subzero.logger :as log]
+     [check.core :refer [check]])
+    #?(:clj
+       (:import
+        [clojure.lang IMeta])))
 
 (declare calc-patch)
 
@@ -34,22 +35,22 @@ change tracking patches.
   (cond
     (set? basis)
     [(apply disj basis other-vals) #{[]}]
-    
+
     (map? basis)
     [(apply dissoc basis other-vals)
      (set (map vector other-vals))]
-    
+
     (vector? basis)
     (let [num-to-clear (count other-vals)]
       (case num-to-clear
         0
         [basis #{}]
-        
+
         1
         (let [idx (first other-vals)]
           [(into (subvec basis 0 idx) (subvec basis (inc idx)))
            #{[idx]}])
-        
+
         :else
         [(let [vals-to-clear (set other-vals)]
            (->> basis
@@ -67,7 +68,7 @@ change tracking patches.
    (cond-> #{[]}
      (vector? basis)
      (into (map vector (range (count basis) (+ (count basis) (count other-vals)))))
-     
+
      (map? basis)
      (into (map (comp vector first) other-vals)))])
 
@@ -78,7 +79,7 @@ change tracking patches.
    (cond-> #{[]}
      (vector? basis)
      (into (map vector (range (count basis) (+ (count basis) (count other-val)))))
-     
+
      (map? basis)
      (into (map (comp vector first) other-val)))])
 
@@ -192,15 +193,15 @@ change tracking patches.
                     operators (::operators rstore-meta)
                     [patched changed-paths] (calc-patch operators basis patch)
                     changed-paths (set changed-paths)
-                    
+
                     affected-paths
                     (set (mapcat (partial all-paths-affected-by-change-at
                                    (:tree watches))
                            changed-paths))
-                    
+
                     affected-watchers
                     (mapcat
-                      (fn [affected-path] 
+                      (fn [affected-path]
                         (->> (get-in watches (path->watch-node-path affected-path))
                           :watch-keys
                           (map
@@ -236,10 +237,8 @@ change tracking patches.
           (assoc :tree
             (loop [cur-path (path->watch-node-path path)
                    cur-node (update (get-in watches cur-path) :watch-keys disj k)]
-              (if
-                (= [:tree] cur-path)
+              (if (= [:tree] cur-path)
                 cur-node
-                
                 (let [parent-path (-> cur-path pop pop)
                       parent-node (as-> (get-in watches parent-path) $
                                     (if (and (empty? (:watch-keys cur-node)) (empty? (:sub cur-node)))
@@ -247,3 +246,63 @@ change tracking patches.
                                       (assoc-in $ [:sub (-> cur-path peek)] cur-node)))]
                   (recur parent-path parent-node))))))
         watches))))
+
+
+(check ::affected-paths
+  (let [!rstore (rstore {:x {:y {:z 1}} :m {}})
+        !affected-paths (atom #{})]
+    (watch !rstore ::xyz-path [:x :y :z]
+      (fn [& _] (swap! !affected-paths conj [:x :y :z])))
+    (watch !rstore ::xy-path [:x :y]
+      (fn [& _] (swap! !affected-paths conj [:x :y])))
+    (watch !rstore ::x-path [:x]
+      (fn [& _] (swap! !affected-paths conj [:x])))
+    (watch !rstore ::root-path []
+      (fn [& _] (swap! !affected-paths conj [])))
+    (watch !rstore ::m-path [:m]
+      (fn [& _] (swap! !affected-paths conj [:m])))
+
+    (patch! !rstore
+      {:path [:x :y]
+       :change [:value 2]})
+
+    (assert (= @!affected-paths #{[] [:x] [:x :y] [:x :y :z]}))))
+
+
+(check ::assoc-op
+  (let [orig {:foo "foo"}
+        !rstore (rstore orig)
+        [old new] (patch! !rstore {:path [] :change [:assoc :foo "FOO" :bar "BAR"]})]
+    (assert (= old orig))
+    (assert (= new {:foo "FOO" :bar "BAR"}))))
+
+(check ::clear-op
+  (let [orig {:foo "foo" :x [1 2]}
+        !rstore (rstore orig)
+        [old new] (patch! !rstore
+                    [{:path [] :change [:clear :foo]}
+                     {:path [:x] :change [:clear 1]}])]
+    (assert (= old orig))
+    (assert (= new {:x [1]}))))
+
+(check ::conj-op
+  (let [orig {:x [1]}
+        !rstore (rstore orig)
+        [old new] (patch! !rstore [{:path [:x] :change [:conj 2 3]}])]
+    (assert (= old orig))
+    (assert (= new {:x [1 2 3]}))))
+
+(check ::into-op
+  (let [orig {:x [1]}
+        !rstore (rstore orig)
+        [old new] (patch! !rstore [{:path [:x] :change [:into [2 3]]}])]
+    (assert (= old orig))
+    (assert (= new {:x [1 2 3]}))))
+
+(check ::call-op
+  (let [orig {:x 1}
+        !rstore (rstore orig)
+        [old new] (patch! !rstore [{:path [:x] :change [:call inc]}])]
+    (assert (= old orig))
+    (assert (= new {:x 2}))))
+

@@ -37,7 +37,7 @@
       (prof/serve-ui 8888)))
 
 (defn bench-all!
-  []
+  [& _]
   (c/quick-bench (zh/html !db normal-page))
   (c/quick-bench (str (h/html normal-page)))
   (c/quick-bench (ch/html normal-page)))

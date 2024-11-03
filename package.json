@@ -1,9 +1,10 @@
 {
   "scripts": {
-    "test": "shadow-cljs compile browser-tests node-tests && web-test-runner \"target/browser-tests/all.js\" --node-resolve && node target/node-tests.js"
+    "test": "shadow-cljs compile test &&  node --enable-source-maps target/test/all.js"
   },
   "devDependencies": {
-    "@web/test-runner": "^0.18.1",
+    "happy-dom": "^15.8.0",
     "shadow-cljs": "^2.28.4"
-  }
+  },
+  "type": "module"
 }

@@ -1,18 +1,19 @@
 (ns subzero.core
   (:require
    [subzero.rstore :as rstore]
-   [subzero.impl.markup :as markup]))
+   [subzero.impl.markup :as markup]
+   [check.core :refer [check]]))
 
 (defn create-db
   []
   (rstore/rstore {}))
 
-(defn dispose-db
+(defn dispose-db!
   [!db]
   (doseq [plugin-state (vals @!db)
           :let [finl-fn (::finl plugin-state)]
           :when (ifn? finl-fn)]
-    (finl-fn))
+    (finl-fn plugin-state))
   (rstore/patch! !db {:path [] :change [:value {}]}))
 
 (defn install-plugin!
@@ -36,7 +37,7 @@
   (let [[old-db _] (rstore/patch! !db {:path [] :change [:clear k]})]
     (when-let [plugin-state (get old-db k)]
       (when (fn? (::finl plugin-state))
-        ((::finl plugin-state))))))
+        ((::finl plugin-state) plugin-state)))))
 
 (defn element-name
   [kw]
@@ -46,10 +47,10 @@
    (do
      (defn js-proxy [x & {:keys [get]}]
        (js* "new Proxy(~{}, ~{})" x #js{:get get}))
-     
+
      (def ^:private iequiv-prop "cljs$core$IEquiv$_equiv$arity$2")
      (defonce ^:private key-eq-sym (js/Symbol "equivKey"))
-     
+
      (defn with-ident-eq "
      Returns a version of `x` with IEquiv overridden with
      an identity check.  Useful to avoid comparison overhead
@@ -62,7 +63,7 @@
            (if (= prop iequiv-prop)
              identical?
              (js/Reflect.get target prop receiver)))))
-     
+
      (defn with-const-eq "
      Returns a version of `x` with IEquiv overridden to compare
      against a given constant.  Meant to help optimize prop
@@ -79,11 +80,32 @@
              (cond
                (= key-eq-sym prop)
                k
-               
+
                (= iequiv-prop prop)
                equiv-fn
-               
+
                :else
                (js/Reflect.get target prop receiver))))))
      nil))
 
+#?(:cljs
+   (do
+     (check ::with-ident-eq
+       (let [m1 (with-ident-eq (hash-map :foo "BAR"))
+             m2 (with-ident-eq (hash-map :foo "BAR"))]
+         (assert (not= m1 m2))
+         (assert (= m1 m1))
+         (assert (= m2 m2))
+         (assert (map? m1))
+         (assert (map? m2))))
+     (check ::with-const-eq
+       (let [m1 (with-const-eq :foo {:foo "BAR"})
+             m2 (with-const-eq :foo {:foo "BAR"})
+             m3 (with-const-eq :bar {:foo "BAR"})
+             m4 {:foo "BAR"}]
+         (assert (= m1 m2))
+         (assert (not= m1 m3))
+         (assert (not= m1 m4))
+         (assert (map? m1))
+         (assert (map? m2))
+         (assert (map? m3))))))

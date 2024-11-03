@@ -1,13 +1,9 @@
-{:deps {:aliases [:test-cljs]}
+{:deps {:aliases [:dev]}
  
  :builds
- {:browser-tests
+ {:test
   {:target :esm
-   :output-dir "target/browser-tests"
-   :ns-regexp ".+[-]btest$"
-   :modules {:all {:entries [subzero.component-btest]}}}
-  
-  :node-tests
-  {:target :node-test
-   :ns-regexp ".+[-]test$"
-   :output-to "target/node-tests.js"}}}
+   :runtime :node
+   :output-dir "target/test"
+   :js-options {:js-provider :import}
+   :modules {:all {:entries [dev test]}}}}}

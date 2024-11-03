@@ -37,17 +37,18 @@ State lives at `::state` in the db, and has:
      [goog :refer [DEBUG]]
      [goog.object :as obj]
      [clojure.string :as str]
-     [clojure.set :as set]))
+     [clojure.set :as set]
+     [check.core :refer [check when-check]]))
 
 (defn- compile-css
-  [s]
-  (doto (js/CSSStyleSheet.) (.replace s)))
+  [!db s]
+  (let [CSSStyleSheet (.-CSSStyleSheet ^js (get-in @!db [::state ::window]))]
+    (doto (CSSStyleSheet.) (.replaceSync s))))
 
 (defonce ^:private private-state-sym (js/Symbol "subzeroWebComponentsPrivate"))
 (defonce ^:private render-order-sym (js/Symbol "subzeroWebComponentsRenderOrder"))
 (defonce ^:private html-ns "http://www.w3.org/1999/xhtml")
 (defonce ^:private svg-ns "http://www.w3.org/2000/svg")
-(defonce ^:private default-stylesheet (compile-css ":host { display: contents; }"))
 (defonce ^:private js-undefined (js* "undefined"))
 
 (declare invalidate! schedule-animation-frame!)
@@ -188,8 +189,7 @@ when the asset changes on disk.
       (or
         (get-in @!db [::state ::css-stylesheet-objects absolute-url-str])
 
-        (let [new-css-obj (compile-css "* { display: none; }")]
-          (.replaceSync new-css-obj "* { display: none; }")
+        (let [new-css-obj (compile-css !db "* { display: none; }")]
           (ensure-top-level-css-link !db absolute-url-str)
           (load-stylesheet-contents! new-css-obj
             (or
@@ -202,9 +202,9 @@ when the asset changes on disk.
           new-css-obj)))
 
     (string? x)
-    (compile-css x)
+    (compile-css !db x)
 
-    (instance? js/CSSStyleSheet x)
+    (instance? (.-CSSStyleSheet ^js (get-in @!db [::state ::window])) x)
     x))
 
 (defn- adjusted-prop-value
@@ -418,8 +418,7 @@ from a set/coll of keywords.
         form-associated? (-> shadow-root .-host .-constructor .-formAssociated)
         diff (diff-props (::props @!private-state) props)
         ^js host-css (or (::host-css @!private-state)
-                       (let [x (js/CSSStyleSheet.)]
-                         (.replaceSync x ":host {}")
+                       (let [x (compile-css !db ":host {}")]
                          (swap! !private-state assoc ::host-css x)
                          x))]
     (when-not (empty? diff)
@@ -439,32 +438,35 @@ from a set/coll of keywords.
       (patch-listeners! !db (.-host shadow-root) (update-keys (diff :#on-host) ->HostListenKey))
 
       ;; patch internals
-      (doseq [[k [_ new-val]] (diff :#internals)]
-        (case k
-          :#states
-          (when-some [states ^js/CustomStateSet (.-states internals)]
-            (.clear states)
-            (doseq [state-val new-val]
-              (.add states (name state-val))))
+      (when internals
+        (let [internals-fields-index (get-fields-index-for-class !db
+                                       (.-ElementInternals ^js (get-in @!db [::state ::window])))]
+          (doseq [[k [_ new-val]] (diff :#internals)]
+            (case k
+              :#states
+              (when-some [states ^js/CustomStateSet (.-states internals)]
+                (.clear states)
+                (doseq [state-val new-val]
+                  (.add states (name state-val))))
 
-          :#value
-          (when form-associated?
-            (let [[value state] (if (map? new-val)
-                                  [(:value new-val) (:state new-val)]
-                                  [new-val nil])]
-              (.setFormValue internals (or value "") (or state ""))))
+              :#value
+              (when form-associated?
+                (let [[value state] (if (map? new-val)
+                                      [(:value new-val) (:state new-val)]
+                                      [new-val nil])]
+                  (.setFormValue internals (or value "") (or state ""))))
 
-          :#validity
-          (when form-associated?
-            (.setValidity internals
-              (coll->validity-flags-obj (:flags new-val))
-              (or (:message new-val) js-undefined)
-              (or (:anchor new-val) js-undefined))
-            (when (:report? new-val)
-              (.reportValidity internals)))
+              :#validity
+              (when form-associated?
+                (.setValidity internals
+                  (coll->validity-flags-obj (:flags new-val))
+                  (or (:message new-val) js-undefined)
+                  (or (:anchor new-val) js-undefined))
+                (when (:report? new-val)
+                  (.reportValidity internals)))
 
-          (when-some [field-name (get (get-fields-index-for-class !db js/ElementInternals) k)]
-            (obj/set internals field-name new-val)))))
+              (when-some [field-name (get internals-fields-index k)]
+                (obj/set internals field-name new-val)))))))
     (swap! !private-state assoc ::props props))
   nil)
 
@@ -548,9 +550,10 @@ from a set/coll of keywords.
 (defn- prepare-node-for-removal!
   [!db ^js/Node node]
   (let [!private-state (get-private-state node)
-        props (::props @!private-state)]
+        props (::props @!private-state)
+        shadow-root-class (.-ShadowRoot ^hs (get-in @!db [::state ::window]))]
     (cond
-      (instance? js/ShadowRoot node)
+      (instance? shadow-root-class node)
       (doseq [[k listener] (:#on-host props)]
         (when (some? listener)
           (unlisten (->HostListenKey k) !db (.-host node))))
@@ -677,9 +680,16 @@ from a set/coll of keywords.
           (str/split (.getPropertyValue computed-style "animation-duration") #"\s*,\s*")
           (str/split (.getPropertyValue computed-style "animation-delay") #"\s*,\s*"))))))
 
+(defn set-timeout!
+  ([!db f]
+   (set-timeout! !db f 0))
+  ([!db f to]
+   (.setTimeout ^js/Window (get-in @!db [::state ::window]) f to)))
+
 (defn- patch-children!
   [!db ^js/HTMLElement host ^js/Node node children]
   (let [document ^js/HTMLDocument (get-in @!db [::state ::document])
+        text-node-type (-> ^js (get-in @!db [::state ::window]) .-Node .-TEXT_NODE)
         host-state @(get-private-state host)
         disable-tags? (get-in @!db [::state ::disable-tags?])
         source-layout (->> node .-childNodes array-seq
@@ -698,7 +708,7 @@ from a set/coll of keywords.
         !child-doms (atom
                       (group-by
                         (fn [child-dom]
-                          (if (-> child-dom .-nodeType (= js/Node.TEXT_NODE))
+                          (if (= text-node-type (-> child-dom .-nodeType))
                             :text
                             (let [props (::props @(get-private-state child-dom))]
                               [(:#sel props) (:#key props)])))
@@ -751,7 +761,7 @@ from a set/coll of keywords.
                                     (patch-children! !db host child-element body))
 
                                   (when (::initializing? @!child-element-state)
-                                    (js/setTimeout
+                                    (set-timeout! !db
                                       (fn []
                                         (swap! !child-element-state assoc ::initializing? false)
                                         (rstore/patch! !db
@@ -855,7 +865,7 @@ from a set/coll of keywords.
               (do
                 (.removeChild node child-node)
                 (prepare-node-for-removal! !db child-node))
-              (js/setTimeout
+              (set-timeout! !db
                 (fn []
                   (when (::finalizing? @!child-state)
                     (.removeChild node child-node)
@@ -991,7 +1001,7 @@ from a set/coll of keywords.
                     (keep #(when (pos? (val %)) (key %)))
                     set)]
               (when (seq observed-events)
-                (js/setTimeout
+                (set-timeout! !db
                   (fn []
                     (when (contains? observed-events event-type)
                       (.dispatchEvent shadow (js/Event. event-type)))
@@ -1002,7 +1012,7 @@ from a set/coll of keywords.
               (log/error "Error rendering component"
                 :data {:component (::name @!static-state)}
                 :ex ex)))))))
-  (js/setTimeout
+  (set-timeout! !db
     (fn []
       (expire-elements! !db)
       (when-let [after-render (get-in @!db [::state ::after-render])]
@@ -1017,7 +1027,9 @@ from a set/coll of keywords.
   (when-not (get-in @!db [::state ::pending-render-id])
     (rstore/patch! !db
       {:path [::state ::pending-render-id]
-       :change [:value (js/requestAnimationFrame (partial update-dirty-elements! !db))]})))
+       :change [:value (.requestAnimationFrame
+                         ^js/Window (get-in @!db [::state ::window])
+                         (partial update-dirty-elements! !db))]})))
 
 (defn- invalidate!
   [!db ^js/HTMLElement element ignore-tags?]
@@ -1080,7 +1092,7 @@ from a set/coll of keywords.
                             (swap! !instance-state assoc-in [::prop-vals (:prop prop-spec)]
                               (some-> (.getAttribute instance (:attr prop-spec))
                                 (attr-reader (:attr prop-spec) component-name)))))))
-        default-css (cond-> [default-stylesheet]
+        default-css (cond-> [(get-in @!db [::state ::default-css])]
                       inherit-doc-css?
                       (into (->> (.querySelectorAll document "link[rel=\"stylesheet\"]")
                               .values es6-iterator-seq
@@ -1220,12 +1232,13 @@ from a set/coll of keywords.
         registry ^js/CustomElementRegistry (get-in @!db [::state ::registry])]
     (if-let [existing (.get registry el-name)]
       (update-element-class !db existing component-name component-spec old-component-spec)
-      (let [new-class (js* "(class extends HTMLElement {
+      (let [html-element-class (.-HTMLElement ^js (get-in @!db [::state ::window]))
+            new-class (js* "(class extends ~{} {
                                 constructor() {
                                     super();
                                     this['init']()
                                 }
-                            })")
+                            })" html-element-class)
             !static-state (get-private-state new-class)]
 
         (swap! !static-state assoc ::instances #{})
@@ -1244,7 +1257,7 @@ from a set/coll of keywords.
 
                   (reset! !instance-state
                     {::shadow shadow
-                     ::internals (.attachInternals instance)
+                     ::internals (when (fn? (.-attachInternals instance)) (.attachInternals instance))
                      ::prop-vals {}
                      ::lifecycle-event-listener-counts {}
                      ::doms-on-focus-path #{}
@@ -1306,7 +1319,7 @@ from a set/coll of keywords.
         (.insertAdjacentElement original "beforebegin" clone)
         (.addEventListener clone "load"
           (fn [_]
-            (js/setTimeout #(.remove original) 60))
+            (set-timeout! !db #(.remove original) 60))
           #js{:once true})
         (rstore/patch! !db
           [{:path [::css-link-elements]
@@ -1355,81 +1368,229 @@ from a set/coll of keywords.
   nil)
 
 (defn install!
-  [!db ^js/HTMLDocument doc ^js/CustomElementRegistry cer
+  [!db ^js/Window doc ^js/CustomElementRegistry cer
    & {:keys [hot-reload? disable-tags? preproc-vnode
              after-render before-render] :as opts}]
-  {:pre [(instance? js/HTMLDocument doc)
-         (some? (::component-registry/state @!db))]}
-  (core/install-plugin! !db ::state
-    (fn web-components-plugin
-      [!db]
-      {::hot-reload? (if (some? hot-reload?) hot-reload? DEBUG)
-       ::disable-tags? (if (some? disable-tags?) disable-tags? DEBUG)
-       ::document doc
-       ::registry cer
-       ::class->fields-index {}
-       ::css-link-elements #{}
-       ::css-stylesheet-objects {}
-       ::href-overrides {}
-       ::elements-to-patch #{}
-       ::elements-to-render #{}
-       ::elements-to-disconnect #{}
-       ::pending-render-id nil
-       ::vdom-render-interval-id nil
-       ::render-order-seq 0
-       ::preproc-vnode (if preproc-vnode
-                         (comp preproc-vnode markup/preproc-vnode)
-                         markup/preproc-vnode)
-       ::after-render after-render
-       ::before-render before-render
+  {:pre [(some? (::component-registry/state @!db))]}
+  (let [window ^js/Window (or (:window opts) js/window)]
+    (core/install-plugin! !db ::state
+      (fn web-components-plugin
+        [!db]
+        {::hot-reload? (if (some? hot-reload?) hot-reload? (and DEBUG (= js/globalThis window)))
+         ::disable-tags? (if (some? disable-tags?) disable-tags? DEBUG)
+         ::document doc
+         ::registry cer
+         ::window window
+         ::class->fields-index {}
+         ::css-link-elements #{}
+         ::css-stylesheet-objects {}
+         ::href-overrides {}
+         ::elements-to-patch #{}
+         ::elements-to-render #{}
+         ::elements-to-disconnect #{}
+         ::pending-render-id nil
+         ::vdom-render-interval-id nil
+         ::render-order-seq 0
+         ::preproc-vnode (if preproc-vnode
+                           (comp preproc-vnode markup/preproc-vnode)
+                           markup/preproc-vnode)
+         ::after-render after-render
+         ::before-render before-render
 
-       ::core/init
-       (fn web-components-plugin-init
-         []
-         (when (hot-reload-enabled? !db)
-           (if (= (.-readyState doc) "complete")
-             (start-hot-reload-observer! !db)
-             (.addEventListener (.-defaultView doc) "load"
-               (fn []
-                 (start-hot-reload-observer! !db))
-               #js{:once true})))
+         ::core/init
+         (fn web-components-plugin-init
+           []
+           (when (hot-reload-enabled? !db)
+             (if (= (.-readyState doc) "complete")
+               (start-hot-reload-observer! !db)
+               (.addEventListener (.-defaultView doc) "load"
+                 (fn []
+                   (start-hot-reload-observer! !db))
+                 #js{:once true})))
 
-         ;; preemptively index some classes
-         (get-fields-index-for-class !db js/HTMLElement)
-         (get-fields-index-for-class !db js/ElementInternals)
+           ;; preemptively index some classes
+           (get-fields-index-for-class !db ^js (.-HTMLElement window))
+           (some-> window ^js (.-ElementInternals) (get-fields-index-for-class !db))
 
-         (let [components-path [::component-registry/state ::component-registry/components]]
+           (let [components-path [::component-registry/state ::component-registry/components]]
            ;; watch for new component registrations
-           (rstore/watch !db ::components components-path
-             (fn [old-val new-val _changed-paths]
+             (rstore/watch !db ::components components-path
+               (fn [old-val new-val _changed-paths]
                ;; TODO: use changed-paths to optimize
-               (doseq [[component-name component-spec] new-val
-                       :let [old-component-spec (get old-val component-name)]
-                       :when (not (identical? old-component-spec component-spec))]
-                 (update-component !db component-name component-spec old-component-spec))))
+                 (doseq [[component-name component-spec] new-val
+                         :let [old-component-spec (get old-val component-name)]
+                         :when (not (identical? old-component-spec component-spec))]
+                   (update-component !db component-name component-spec old-component-spec))))
 
            ;; handle existing component registrations
-           (doseq [[component-name component-spec] (get-in @!db components-path)]
-             (update-component !db component-name component-spec nil)))
+             (doseq [[component-name component-spec] (get-in @!db components-path)]
+               (update-component !db component-name component-spec nil)))
 
          ;; setup vdom render interval
-         (rstore/patch! !db
-           {:path [::state ::vdom-render-interval-id]
-            :change [:value (js/setInterval render-vdoms-for-dirty-elements! 7 !db)]}))
+           (rstore/patch! !db
+             [{:path [::state ::vdom-render-interval-id]
+               :change [:value (js/setInterval render-vdoms-for-dirty-elements! 7 !db)]}
+              {:path [::state ::default-css]
+               :change [:value (compile-css !db ":host { display: contents; }")]}]))
 
-       ::core/finl
-       (fn web-components-plugin-finl
-         []
-         (log/warn "Requested removal of web components plugin, but custom element registrations can't be removed cleanly.")
-         (when (hot-reload-enabled? !db)
-           (stop-hot-reload-observer! !db))
-         (when-let [render-id (get-in @!db [::state ::pending-render-id])]
-           (js/cancelAnimationFrame render-id))
-         (js/clearInterval (get-in @!db [::state ::vdom-render-interval-id]))
+         ::core/finl
+         (fn web-components-plugin-finl
+           [state]
+           (log/warn "Requested removal of web components plugin, but custom element registrations can't be removed cleanly.")
+           (when (hot-reload-enabled? !db)
+             (stop-hot-reload-observer! !db))
+           (when-let [render-id (::pending-render-id state)]
+             (js/cancelAnimationFrame render-id))
+           (js/clearInterval (::vdom-render-interval-id state))
          ;; TODO: see if we can clean up the classes enough that they can be reused
-         )})
-    (dissoc opts :hot-reload? :disable-tags? :preproc-vnode :after-render :before-render)))
+           )})
+      (dissoc opts :hot-reload? :disable-tags? :preproc-vnode :after-render :before-render))))
 
 (defn remove!
   [!db]
   (core/remove-plugin! !db ::state))
+
+
+(when-check
+  (defn do-steps [!db zero-element & step-fns]
+    (if (empty? step-fns)
+      (js/Promise. ;; this gives async stuff time to finish up
+        (fn [resolve]
+          (set-timeout! !db resolve 120)))
+      (js/Promise.
+        (fn [resolve reject]
+          (set-timeout! !db
+            (fn []
+              (.requestAnimationFrame
+                ^js/Window (get-in @!db [::state ::window])
+                (fn []
+                  (try
+                    (-> ((first step-fns) zero-element)
+                      js/Promise.resolve
+                      (.then
+                        (fn []
+                          (resolve (apply do-steps !db zero-element (rest step-fns)))))
+                      (.catch reject))
+                    (catch :default ex
+                      (reject ex)))))))))))
+
+  (defn steps [!db create-element-fn & step-fns]
+    (let [el (create-element-fn)]
+      (.append ^js/Document (get-in @!db [::state ::document]) el)
+      (.then (apply do-steps !db el step-fns)
+        (fn [] (.remove el)))))
+
+  (defn with-test-db [f]
+    (let [win ((resolve 'dev/create-window))
+          !db (core/create-db)]
+      (component-registry/install! !db)
+      (install! !db (.-document win) (.-customElements win) :window win :hot-reload? false)
+      (component-registry/reg-component !db ::echo
+        :props #{:vdom}
+        :view (fn [{:keys [vdom]}] vdom))
+
+      (.finally (js/Promise.resolve (f !db))
+        (fn []
+          (.then ^js/Promise ((resolve 'dev/dispose-window) win)
+            (fn []
+              (remove! !db)))))))
+
+
+  (defn create-element [!db name]
+    (.createElement ^js/Document (get-in @!db [::state ::document]) (core/element-name name))))
+
+(check ::component-renders
+  (with-test-db
+    (fn [!db]
+      (steps !db #(create-element !db ::echo)
+        (fn [^js/HTMLElement echo]
+          (set! (.-vdom echo) [:div "FOO"]))
+        (fn [^js/HTMLElement echo]
+          (assert (= 1 (-> echo .-shadowRoot .-childNodes .-length)))
+          (let [first-child (-> echo .-shadowRoot .-firstChild)]
+            (assert (= "DIV" (.-nodeName first-child)))
+            (assert (= "FOO" (.-innerText first-child)))))))))
+
+(check ::component-reacts-to-property
+  (with-test-db
+    (fn [!db]
+      (steps !db #(create-element !db ::echo)
+        (fn [^js/HTMLElement el]
+          (assert (= "" (-> el .-shadowRoot .-firstChild .-nodeValue)))
+          (set! (.-vdom el) "BAR"))
+        (fn [^js/HTMLElement el]
+          (assert (= "BAR" (-> el .-shadowRoot .-firstChild .-nodeValue))))))))
+
+(check ::component-reacts-to-attribute
+  (with-test-db
+    (fn [!db]
+      (steps !db #(create-element !db ::echo)
+        (fn [^js/HTMLElement el]
+          (assert (= "" (-> el .-shadowRoot .-firstChild .-nodeValue)))
+          (.setAttribute el "vdom" "BAR"))
+        (fn [^js/HTMLElement el]
+          (assert (= "BAR" (-> el .-shadowRoot .-firstChild .-nodeValue))))))))
+
+(check ::component-reacts-to-binding
+  (with-test-db
+    (fn [!db]
+      (let [!atom (atom "BAR")]
+        (steps !db  #(create-element !db ::echo)
+          (fn [^js/HTMLElement el]
+            (assert (= "" (-> el .-shadowRoot .-firstChild .-nodeValue)))
+            (set! (.-vdom el)
+              [:input :#bind {:value !atom}]))
+          (fn [^js/HTMLElement el]
+            (assert (= "BAR" (-> el .-shadowRoot .-firstChild .-value)))
+            (reset! !atom "BAZ"))
+          (fn [^js/HTMLElement el]
+            (assert (= "BAZ" (-> el .-shadowRoot .-firstChild .-value))))
+          (fn [^js/HTMLElement el]
+            (set! (.-vdom el) [:input]))
+          (fn [_]
+            (reset! !atom "FOO"))
+          (fn [^js/HTMLElement el]
+            (assert (contains? #{"" "null"} (-> el .-shadowRoot .-firstChild .-value)))))))))
+
+(check ::component-listens-to-events
+  (with-test-db
+    (fn [!db]
+      (let [!atom (atom nil)
+            InputEvent (.-InputEvent ^js (get-in @!db [::state ::window]))]
+        (steps !db #(create-element !db ::echo)
+          (fn [^js/HTMLElement el]
+            (assert (= "" (-> el .-shadowRoot .-firstChild .-nodeValue)))
+            (set! (.-vdom el)
+              [:input :#on {:input #(reset! !atom (-> % .-target .-value))}]))
+          (fn [^js/HTMLElement el]
+            (let [input-el (-> el .-shadowRoot .-firstChild)]
+              (assert (= "" (.-value input-el)))
+              (set! (.-value input-el) "BAR")
+              (.dispatchEvent input-el (InputEvent. "input"))))
+          (fn [^js/HTMLElement el]
+            (assert (= "BAR" @!atom))
+            (set! (.-vdom el) [:input]))
+          (fn [^js/HTMLElement el]
+            (let [input-el (-> el .-shadowRoot .-firstChild)]
+              (set! (.-value input-el) "BAZ")
+              (.dispatchEvent input-el (InputEvent. "input"))))
+          (fn [^js/HTMLElement _el]
+            (assert (= @!atom "BAZ"))))))))
+
+(check ::component-disconnects
+  (with-test-db
+    (fn [!db]
+      (let [!disconnected? (atom false)]
+        (steps !db #(create-element !db ::echo)
+          (fn [^js/HTMLElement el]
+            (set! (.-vdom el)
+              [::echo
+               :vdom
+               [:root>
+                :#on {:disconnect #(reset! !disconnected? true)}]]))
+          (fn [^js/HTMLElement el]
+            (set! (.-vdom el) nil))
+          (fn [_]
+            (js/Promise. (fn [resolve] (set-timeout! !db resolve 10))))
+          (fn [_]
+            (assert (true? @!disconnected?))))))))

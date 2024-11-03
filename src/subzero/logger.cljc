@@ -4,6 +4,7 @@
    #?(:clj [clojure.stacktrace :as stacktrace])))
 
 (defmulti log (fn log-dispatch [level _msg & _opts] level))
+(def ^:private devtools? (boolean (find-ns 'devtools.formatters.core)))
 
 (defmethod log :default
   [level msg {:keys [data ex file line]}]
@@ -18,7 +19,10 @@
                  (conj (cond-> data (and file line) (conj [:loc (str file ":" line)])))
                  
                  (some? ex)
-                 (into ["\n" ex]))))
+                 (into ["\n" ex])
+                 
+                 (not devtools?)
+                 (->> (map pr-str)))))
      :clj (binding [*out* *err*]
             (printf "%s %s%n"
               (case level
