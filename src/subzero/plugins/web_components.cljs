@@ -1410,7 +1410,7 @@ from a set/coll of keywords.
 
            ;; preemptively index some classes
            (get-fields-index-for-class !db ^js (.-HTMLElement window))
-           (some-> window ^js (.-ElementInternals) (get-fields-index-for-class !db))
+           (some->> window ^js (.-ElementInternals) (get-fields-index-for-class !db))
 
            (let [components-path [::component-registry/state ::component-registry/components]]
            ;; watch for new component registrations
