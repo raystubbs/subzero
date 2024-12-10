@@ -8,8 +8,14 @@
 (defn handle-status
   [status]
   (when-not (some #(= ::check/pending %) (vals status))
-    (when (some #(= ::check/failure %) (vals status))
-      (System/exit 1))))
+    (if (some #(= ::check/failure %) (vals status))
+      (do
+        (print "The following checks have failed:")
+        (doseq [[k v] status :when (not= :check.core/success v)]
+          (print "  " k))
+        (System/exit 1))
+      (print "All" (count status) "checks passed.")))
+  nil)
 
 (defn- run
   [& _args]

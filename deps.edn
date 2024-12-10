@@ -1,5 +1,5 @@
 {:paths ["src"]
- :deps {me.raystubbs/check {:mvn/version "0.0.1"}}
+ :deps {me.raystubbs/check {:git/url "https://github.com/raystubbs/check.git" :git/sha "6e620a1a5347ea3e7d2e4544bf1248fb6e92c93e"}}
 
  :aliases
  {:dev
@@ -7,6 +7,7 @@
                 org.clojure/clojurescript {:mvn/version "1.11.60"}
                 thheller/shadow-cljs {:mvn/version "2.21.0"}}
    :me.raystubbs.check/enabled true
+   :me.raystubbs.check/ns-include-re "subzero[.].*"
    :extra-paths ["dev"]}
   
   :build
