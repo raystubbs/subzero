@@ -489,12 +489,14 @@ from a set/coll of keywords.
           (patch-bindings! !db element (diff :#bind))
 
           ;; patch styles
-          (when-let [style-diff (diff :#style)]
-            (let [style-obj (.-style element)]
-              (doseq [[k [_ new-val]] style-diff]
-                (if-not new-val
-                  (.removeProperty style-obj (name k))
-                  (.setProperty style-obj (name k) (markup/clj->css-property new-val))))))
+            (when-let [style-diff (diff :#style)]
+              (if (empty? style-diff)
+                (.removeAttribute element "style")
+                (let [style-obj (.-style element)]
+                  (doseq [[k [_ new-val]] style-diff]
+                    (if-not new-val
+                      (.removeProperty style-obj (name k))
+                      (.setProperty style-obj (name k) (markup/clj->css-property new-val)))))))
 
            ;; patch classes
           (when-let [[_ class] (diff :#class)]
@@ -506,10 +508,10 @@ from a set/coll of keywords.
               (.removeAttribute element "class")
 
               (coll? class)
-              (set! (.-className element) (str/join " " class))
+              (.setAttribute element "class" (str/join " " class))
 
               :else
-              (set! (.-className element) (str class))))
+              (.setAttribute element "class" (str class))))
 
           (swap! !private-state assoc ::props props)))
 
@@ -539,10 +541,10 @@ from a set/coll of keywords.
         (when (seq class)
           (cond
             (coll? class)
-            (set! (.-className element) (str/join " " class))
+            (.setAttribute element "class" (str/join " " class))
 
             :else
-            (set! (.-className element) (str class))))
+            (.setAttribute element "class" (str class))))
 
         (swap! !private-state assoc ::props (assoc props :#style style :#class class)))))
   nil)
@@ -1412,26 +1414,26 @@ from a set/coll of keywords.
            (get-fields-index-for-class !db ^js (.-HTMLElement window))
            (some->> window ^js (.-ElementInternals) (get-fields-index-for-class !db))
 
+           ;; setup vdom render interval
+           (rstore/patch! !db
+             [{:path [::state ::vdom-render-interval-id]
+               :change [:value (js/setInterval render-vdoms-for-dirty-elements! 7 !db)]}
+              {:path [::state ::default-css]
+               :change [:value (compile-css !db ":host { display: contents; }")]}])
+
            (let [components-path [::component-registry/state ::component-registry/components]]
-           ;; watch for new component registrations
+             ;; watch for new component registrations
              (rstore/watch !db ::components components-path
                (fn [old-val new-val _changed-paths]
-               ;; TODO: use changed-paths to optimize
+                 ;; TODO: use changed-paths to optimize
                  (doseq [[component-name component-spec] new-val
                          :let [old-component-spec (get old-val component-name)]
                          :when (not (identical? old-component-spec component-spec))]
                    (update-component !db component-name component-spec old-component-spec))))
 
-           ;; handle existing component registrations
+             ;; handle existing component registrations
              (doseq [[component-name component-spec] (get-in @!db components-path)]
-               (update-component !db component-name component-spec nil)))
-
-         ;; setup vdom render interval
-           (rstore/patch! !db
-             [{:path [::state ::vdom-render-interval-id]
-               :change [:value (js/setInterval render-vdoms-for-dirty-elements! 7 !db)]}
-              {:path [::state ::default-css]
-               :change [:value (compile-css !db ":host { display: contents; }")]}]))
+               (update-component !db component-name component-spec nil))))
 
          ::core/finl
          (fn web-components-plugin-finl
@@ -1442,7 +1444,7 @@ from a set/coll of keywords.
            (when-let [render-id (::pending-render-id state)]
              (js/cancelAnimationFrame render-id))
            (js/clearInterval (::vdom-render-interval-id state))
-         ;; TODO: see if we can clean up the classes enough that they can be reused
+           ;; TODO: see if we can clean up the classes enough that they can be reused
            )})
       (dissoc opts :hot-reload? :disable-tags? :preproc-vnode :after-render :before-render))))
 
