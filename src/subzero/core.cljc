@@ -2,7 +2,7 @@
   (:require
    [subzero.rstore :as rstore]
    [subzero.impl.markup :as markup]
-   [check.core :refer [check]]))
+   [clj-arsenal.check :refer [check]]))
 
 (defn create-db
   []

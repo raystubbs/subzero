@@ -38,7 +38,7 @@ State lives at `::state` in the db, and has:
      [goog.object :as obj]
      [clojure.string :as str]
      [clojure.set :as set]
-     [check.core :refer [check when-check]]))
+     [clj-arsenal.check :refer [check when-check]]))
 
 (defn- compile-css
   [!db s]

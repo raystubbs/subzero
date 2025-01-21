@@ -7,7 +7,7 @@ HTML rendering.
      [subzero.impl.util :refer [str-writer str-writer->str write] :as base]
      [subzero.plugins.component-registry :as component-registry]
      [subzero.core :as core]
-     [check.core :refer [check when-check]])
+     [clj-arsenal.check :refer [check when-check]])
     #?(:clj
        (:import
         [java.net URI URL])))

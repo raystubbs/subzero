@@ -1,6 +1,6 @@
 (ns test
   (:require
-   [check.core :as check]
+   [clj-arsenal.check :as check]
    [subzero.core]
    [subzero.rstore]
    [subzero.plugins.html]
@@ -12,7 +12,7 @@
     (if (some #(= ::check/failure %) (vals status))
       (do
         (print "The following checks have failed:")
-        (doseq [[k v] status :when (not= :check.core/success v)]
+        (doseq [[k v] status :when (not= ::success v)]
           (print "  " k))
         (js/process.exit 1))
       (print "All" (count status) "checks passed.")))

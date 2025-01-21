@@ -5,7 +5,7 @@ change tracking patches.
 "
     (:require
      [subzero.logger :as log]
-     [check.core :refer [check]])
+     [clj-arsenal.check :refer [check]])
     #?(:clj
        (:import
         [clojure.lang IMeta])))
