@@ -524,11 +524,11 @@ from a set/coll of keywords.
           (set-element-prop! !db element k v))
 
         ;; listeners
-        (doseq [[k v] (:#on props)]
+        (doseq [[k v] (:#on props) :when (some? v)]
           (listen k !db element (listener-fn !db v)))
 
         ;; bindings
-        (doseq [[k v] (:#bind props)]
+        (doseq [[k v] (:#bind props) :when (some? v)]
           (bind k !db element (binding-watchable !db v)))
 
         ;; patch styles
